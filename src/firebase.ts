@@ -164,14 +164,58 @@ const HISTORY_SEED_DATA: Omit<HistoryRecord, "id">[] = [
 ];
 
 /**
- * Fetch all history records from Firestore.
- * If Firestore is empty, auto-seed with historical data and upload to Firestore.
+ * Helper to execute a promise with a timeout in milliseconds.
+ */
+function withTimeout<T>(promise: Promise<T>, timeoutMs = 3000): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`Timeout of ${timeoutMs}ms exceeded`));
+    }, timeoutMs);
+
+    promise
+      .then((val) => {
+        clearTimeout(timer);
+        resolve(val);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
+
+/**
+ * Fetch all history records.
+ * First tries Express server API `/api/history` (the most synchronized & fastest).
+ * If that fails or is offline, falls back to direct client-side Firestore collection.
+ * If Firestore hangs or fails, falls back to static seed data.
  */
 export async function getHistoryRecords(): Promise<HistoryRecord[]> {
+  // 1. Try Express Backend API first (fast and robust)
+  try {
+    const response = await fetch("/api/history");
+    if (response.ok) {
+      const result = await response.json();
+      if (result.success && Array.isArray(result.data) && result.data.length > 0) {
+        console.log(`[Firebase client] Successfully loaded ${result.data.length} records via Express API.`);
+        return result.data.map((r: any) => ({
+          period: Number(r.period),
+          number: Number(r.number),
+          zodiac: String(r.zodiac)
+        }));
+      }
+    }
+  } catch (apiError: any) {
+    console.warn("[Firebase client API Warning] Failed to fetch via Express API, falling back to direct Firestore:", apiError.message);
+  }
+
+  // 2. Direct Firestore fallback with 3-second timeout
   try {
     const collRef = collection(db, "history");
     const q = query(collRef, orderBy("period", "asc"));
-    const snapshot = await getDocs(q);
+    
+    console.log("[Firebase client] Initiating direct Firestore fetch for 'history' collection...");
+    const snapshot = await withTimeout(getDocs(q), 3000);
     
     const records: HistoryRecord[] = [];
     snapshot.forEach(docSnap => {
@@ -184,7 +228,7 @@ export async function getHistoryRecords(): Promise<HistoryRecord[]> {
     });
 
     if (records.length > 0) {
-      console.log(`[Firebase client] Loaded ${records.length} records from Firestore.`);
+      console.log(`[Firebase client] Loaded ${records.length} records directly from Firestore.`);
       return records;
     }
 
@@ -200,15 +244,13 @@ export async function getHistoryRecords(): Promise<HistoryRecord[]> {
         createdAt: new Date().toISOString()
       });
     });
-    await batch.commit();
+    await withTimeout(batch.commit(), 3000);
 
     console.log("[Firebase client] Successfully seeded Firestore.");
-    return HISTORY_SEED_DATA.map((r, index) => ({
-      ...r
-    }));
+    return HISTORY_SEED_DATA.map(r => ({ ...r }));
   } catch (error: any) {
-    console.error("[Firebase client Error] Failed to fetch history records:", error.message);
-    // Fallback to local seeds
+    console.error("[Firebase client Error] Direct Firestore fetch failed or timed out. Falling back to static local seeds:", error.message);
+    // 3. Fallback to local seeds (instant load under any offline/stuck circumstances)
     return HISTORY_SEED_DATA.map(r => ({ ...r }));
   }
 }
@@ -217,6 +259,22 @@ export async function getHistoryRecords(): Promise<HistoryRecord[]> {
  * Add a new lottery record to Firestore.
  */
 export async function addHistoryRecord(period: number, num: number, zodiac: string): Promise<void> {
+  try {
+    // 1. Try Backend API
+    const response = await fetch("/api/history", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ period, number: num, zodiac })
+    });
+    if (response.ok) {
+      console.log("[Firebase client] Added history record via backend API.");
+      return;
+    }
+  } catch (e: any) {
+    console.warn("[Firebase client API Warning] Failed to add via API, writing directly to Firestore:", e.message);
+  }
+
+  // 2. Direct Firestore fallback
   const docRef = doc(db, "history", String(period));
   await setDoc(docRef, {
     period,
@@ -230,6 +288,20 @@ export async function addHistoryRecord(period: number, num: number, zodiac: stri
  * Delete a lottery record from Firestore.
  */
 export async function deleteHistoryRecord(period: number): Promise<void> {
+  try {
+    // 1. Try Backend API
+    const response = await fetch("/api/history/delete-last", {
+      method: "POST"
+    });
+    if (response.ok) {
+      console.log("[Firebase client] Deleted last history record via backend API.");
+      return;
+    }
+  } catch (e: any) {
+    console.warn("[Firebase client API Warning] Failed to delete last record via API, deleting directly from Firestore:", e.message);
+  }
+
+  // 2. Direct Firestore fallback
   const docRef = doc(db, "history", String(period));
   await deleteDoc(docRef);
 }
@@ -239,17 +311,32 @@ export async function deleteHistoryRecord(period: number): Promise<void> {
  * Defaults to DEFAULT_SETTINGS if empty.
  */
 export async function getStrategyConfig(): Promise<any> {
+  // 1. Try Backend API
+  try {
+    const response = await fetch("/api/config");
+    if (response.ok) {
+      const result = await response.json();
+      if (result.success && result.config) {
+        console.log("[Firebase client] Successfully loaded config via Express API.");
+        return result.config;
+      }
+    }
+  } catch (apiError: any) {
+    console.warn("[Firebase client API Warning] Failed to fetch config via Express API, falling back to direct Firestore:", apiError.message);
+  }
+
+  // 2. Direct Firestore fallback
   try {
     const docRef = doc(db, "config", "current");
-    const snap = await getDoc(docRef);
+    const snap = await withTimeout(getDoc(docRef), 3000);
     if (snap.exists()) {
       return snap.data();
     }
     // Write default if missing
-    await setDoc(docRef, DEFAULT_SETTINGS);
+    await withTimeout(setDoc(docRef, DEFAULT_SETTINGS), 3000);
     return DEFAULT_SETTINGS;
-  } catch (e) {
-    console.warn("[Firebase client] Failed to read strategy config, falling back to default.", e);
+  } catch (e: any) {
+    console.warn("[Firebase client] Direct Firestore config read failed, falling back to default.", e.message);
     return DEFAULT_SETTINGS;
   }
 }
@@ -258,6 +345,22 @@ export async function getStrategyConfig(): Promise<any> {
  * Save strategy configuration to Firestore.
  */
 export async function saveStrategyConfig(config: any): Promise<void> {
+  try {
+    // 1. Try Backend API
+    const response = await fetch("/api/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(config)
+    });
+    if (response.ok) {
+      console.log("[Firebase client] Saved config via backend API.");
+      return;
+    }
+  } catch (e: any) {
+    console.warn("[Firebase client API Warning] Failed to save config via API, writing directly to Firestore:", e.message);
+  }
+
+  // 2. Direct Firestore fallback
   const docRef = doc(db, "config", "current");
   await setDoc(docRef, config);
 }
@@ -267,14 +370,28 @@ export async function saveStrategyConfig(config: any): Promise<void> {
  */
 export async function getSavedAiReport(period: number): Promise<string | null> {
   try {
+    // 1. Try Backend API
+    const response = await fetch(`/api/reports/prediction-results`);
+    if (response.ok) {
+      const result = await response.json();
+      if (result.success && result.data && result.data.period === period && result.data.report) {
+        return result.data.report;
+      }
+    }
+  } catch (e: any) {
+    console.warn("[Firebase client] Failed to load saved report via API:", e.message);
+  }
+
+  // 2. Direct Firestore fallback
+  try {
     const docRef = doc(db, "reports", `prediction_ai_${period}`);
-    const snap = await getDoc(docRef);
+    const snap = await withTimeout(getDoc(docRef), 3000);
     if (snap.exists()) {
       return snap.data().report || null;
     }
     return null;
-  } catch (e) {
-    console.warn("[Firebase client] Failed to load saved AI report:", e);
+  } catch (e: any) {
+    console.warn("[Firebase client] Failed to load saved AI report directly:", e.message);
     return null;
   }
 }
@@ -290,7 +407,7 @@ export async function saveAiReport(period: number, report: string): Promise<void
       report,
       updatedAt: new Date().toISOString()
     });
-  } catch (e) {
-    console.error("[Firebase client] Failed to save AI report:", e);
+  } catch (e: any) {
+    console.error("[Firebase client] Failed to save AI report:", e.message);
   }
 }
