@@ -1,0 +1,30 @@
+{
+  "entities": {
+    "history": {
+      "title": "Lottery History Record",
+      "description": "Historical lottery results stored durably",
+      "type": "object",
+      "properties": {
+        "period": {
+          "type": "integer",
+          "description": "Lottery draw period number"
+        },
+        "number": {
+          "type": "integer",
+          "description": "Lottery draw special number (1-49)"
+        },
+        "zodiac": {
+          "type": "string",
+          "description": "Zodiac animal associated with the special number in 2026 Lunar Calendar"
+        }
+      },
+      "required": ["period", "number", "zodiac"]
+    }
+  },
+  "firestore": {
+    "/history/{periodId}": {
+      "schema": "history",
+      "description": "Lottery history collection indexed by period number"
+    }
+  }
+}

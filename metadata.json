@@ -1,0 +1,6 @@
+{
+  "name": "Lottery AI",
+  "description": "香港六合彩历史数据统计分析、评分模型、历史回测与下一期生肖预测系统",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
