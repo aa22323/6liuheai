@@ -25,7 +25,12 @@ export const FACTOR_METADATA: Record<string, { name: string; desc: string; categ
   ENABLE_CONSECUTIVE_PENALTY: { name: "连续开出惩罚 (Consecutive Penalty)", desc: "生肖若在上一期或连续几期已开出，给予负向分值，降低连庄权重", category: "极值抑制" },
   ENABLE_MAX_MISSING_RECOVERY: { name: "极限遗漏回补 (Max Missing Recovery)", desc: "生肖未开期数逼近历史最大遗漏值（80%以上）时触发爆发回补分", category: "遗漏回归" },
   ENABLE_CYCLE_ANALYSIS: { name: "自相关周期分析 (Cycle Analysis)", desc: "通过自相关函数寻找生肖的最优历史循环周期并进行共振匹配", category: "周期波动" },
-  ENABLE_SIMILAR_WINDOW: { name: "相似历史窗口 (Similar Pattern)", desc: "在历史长河中匹配与最近生肖序列完全相同的片段并预测后续生肖", category: "状态链条" }
+  ENABLE_SIMILAR_WINDOW: { name: "相似历史窗口 (Similar Pattern)", desc: "在历史长河中匹配与最近生肖序列完全相同的片段并预测后续生肖", category: "状态链条" },
+  ENABLE_WUXING_HARMONY: { name: "五行相生相克 (Five Elements)", desc: "计算上期特码五行与十二生肖五行磁场相生相克循环之匹配得分", category: "玄学共鸣" },
+  ENABLE_ZODIAC_HARMONY: { name: "三合六合共振 (Zodiac Harmonies)", desc: "捕捉近期特码生肖所引发的传统三合、六合磁场关联共鸣效应", category: "玄学共鸣" },
+  ENABLE_HESHU_REVERSION: { name: "合数大小单双 (He Shu Reversion)", desc: "监测十位与个位相加之和（合数）的偏离轨道，进行反向校正纠偏", category: "属性纠偏" },
+  ENABLE_DECAY_MARKOV: { name: "时间衰减马尔可夫 (Decay Markov)", desc: "应用时间衰减因子加权，近期转移轨迹权重呈指数高昂，克服静态历史均值噪声", category: "序列递推" },
+  ENABLE_ATTRIBUTE_TRANSITION: { name: "属性特征关联转移 (Attribute-Zodiac Co-occurrence)", desc: "统计上期号码之波色/单双/大小等高维属性特征组合后对下期生肖生成的共生概率", category: "序列递推" }
 };
 
 interface BacktestTabProps {

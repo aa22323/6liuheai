@@ -42,7 +42,9 @@ export const DEFAULT_SETTINGS: IndicatorSettings = {
     ENABLE_SIMILAR_WINDOW: true,
     ENABLE_WUXING_HARMONY: true,
     ENABLE_ZODIAC_HARMONY: true,
-    ENABLE_HESHU_REVERSION: true
+    ENABLE_HESHU_REVERSION: true,
+    ENABLE_DECAY_MARKOV: true,
+    ENABLE_ATTRIBUTE_TRANSITION: true
   },
   weights: {
     HISTORICAL_HEAT_WEIGHT: 1.0,
@@ -63,7 +65,9 @@ export const DEFAULT_SETTINGS: IndicatorSettings = {
     SIMILAR_WINDOW_WEIGHT: 2.0,
     WUXING_HARMONY_WEIGHT: 1.5,
     ZODIAC_HARMONY_WEIGHT: 1.8,
-    HESHU_REVERSION_WEIGHT: 1.2
+    HESHU_REVERSION_WEIGHT: 1.2,
+    DECAY_MARKOV_WEIGHT: 2.5,
+    ATTRIBUTE_TRANSITION_WEIGHT: 2.0
   }
 };
 
@@ -575,6 +579,62 @@ export function computeZodiacScores(dfUpToT: HistoryRecord[], settings: Indicato
     });
   }
 
+  // 20. 时间衰减一阶马尔可夫 (Markov with Recency Decay)
+  if (indicators.ENABLE_DECAY_MARKOV && total > 2) {
+    const w = weights.DECAY_MARKOV_WEIGHT ?? 2.5;
+    const lastZ = dfRich[total - 1].zodiac;
+    
+    const lambda = 0.97;
+    const transitionScores: Record<string, number> = {};
+    allZodiacs.forEach(z => { transitionScores[z] = 0; });
+    let totalWeight = 0;
+
+    for (let i = 0; i < total - 1; i++) {
+      const z1 = dfRich[i].zodiac;
+      const z2 = dfRich[i + 1].zodiac;
+      if (z1 === lastZ) {
+        const dist = total - 1 - i;
+        const weight = Math.pow(lambda, dist);
+        transitionScores[z2] += weight;
+        totalWeight += weight;
+      }
+    }
+
+    allZodiacs.forEach(z => {
+      const prob = totalWeight > 0 ? transitionScores[z] / totalWeight : (1.0 / 12.0);
+      scores[z] += prob * 100 * w;
+    });
+  }
+
+  // 21. 属性联合转移因子 (Last Period Attribute to Next Zodiac Association)
+  if (indicators.ENABLE_ATTRIBUTE_TRANSITION && total > 1) {
+    const w = weights.ATTRIBUTE_TRANSITION_WEIGHT ?? 2.0;
+    const lastRow = dfRich[total - 1];
+    const lastStateKey = `${lastRow.waveColor || "红"}_${lastRow.size || "小"}_${lastRow.oddEven || "双"}`;
+
+    const succCounts: Record<string, number> = {};
+    allZodiacs.forEach(z => { succCounts[z] = 0; });
+    let matchesCount = 0;
+
+    for (let i = 0; i < total - 1; i++) {
+      const row = dfRich[i];
+      const stateKey = `${row.waveColor || "红"}_${row.size || "小"}_${row.oddEven || "双"}`;
+      if (stateKey === lastStateKey) {
+        const nextZodiac = dfRich[i + 1].zodiac;
+        const recencyWeight = Math.pow(0.98, total - 1 - i);
+        succCounts[nextZodiac] += recencyWeight;
+        matchesCount += recencyWeight;
+      }
+    }
+
+    if (matchesCount > 0) {
+      allZodiacs.forEach(z => {
+        const prob = succCounts[z] / matchesCount;
+        scores[z] += prob * 100 * w;
+      });
+    }
+  }
+
   // 归一化至 10 ~ 95
   const vals = Object.values(scores);
   const minS = Math.min(...vals);
@@ -761,7 +821,9 @@ export function optimizeSettings(
     "ENABLE_SIMILAR_WINDOW": "SIMILAR_WINDOW_WEIGHT",
     "ENABLE_WUXING_HARMONY": "WUXING_HARMONY_WEIGHT",
     "ENABLE_ZODIAC_HARMONY": "ZODIAC_HARMONY_WEIGHT",
-    "ENABLE_HESHU_REVERSION": "HESHU_REVERSION_WEIGHT"
+    "ENABLE_HESHU_REVERSION": "HESHU_REVERSION_WEIGHT",
+    "ENABLE_DECAY_MARKOV": "DECAY_MARKOV_WEIGHT",
+    "ENABLE_ATTRIBUTE_TRANSITION": "ATTRIBUTE_TRANSITION_WEIGHT"
   };
 
   activeIndicators.forEach(ind => {

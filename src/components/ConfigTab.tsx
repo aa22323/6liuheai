@@ -171,6 +171,16 @@ export default function ConfigTab({ activeSettings, setActiveSettings }: ConfigT
       title: "19. 合数大小/单双大数修正 (He Shu Reversion)",
       desc: "分析号码个位与十位相加之和（合数）的单双/大小近期偏离度，对偏离值较高的反向属性生肖实施回归补偿。",
       weightKey: "HESHU_REVERSION_WEIGHT"
+    },
+    ENABLE_DECAY_MARKOV: {
+      title: "20. 时间衰减马尔可夫转移 (Decay Markov)",
+      desc: "基于时间衰减的一阶状态转移矩阵。近期的序列转移轨迹将被赋予更高的指数级权重，克服长期静态噪声，灵敏捕捉近期连贯惯性。",
+      weightKey: "DECAY_MARKOV_WEIGHT"
+    },
+    ENABLE_ATTRIBUTE_TRANSITION: {
+      title: "21. 属性特征关联转移因子 (Attribute-Zodiac Co-occurrence)",
+      desc: "多维特征的深度伴随律。统计上期开奖对应的衍生属性组合（红/蓝/绿波色、大/小、单/双）在历史上伴随出现过的后续生肖概率，并加入时间衰减因子修正。",
+      weightKey: "ATTRIBUTE_TRANSITION_WEIGHT"
     }
   };
 
