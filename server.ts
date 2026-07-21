@@ -70,6 +70,14 @@ function resolvePath(relativePath: string): string {
 const app = express();
 app.use(express.json());
 
+// 禁用所有 API 接口的 HTTP 响应缓存，防止移动端 Safari / Chrome 强行缓存旧数据
+app.use("/api", (req, res, next) => {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  next();
+});
+
   // Initialize Firebase Firestore
   const configPath = resolvePath("firebase-applet-config.json");
   let db: any = null;
