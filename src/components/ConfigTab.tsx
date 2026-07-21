@@ -4,9 +4,10 @@
  */
 
 import { useState, useEffect } from "react";
-import { Settings, Save, RotateCcw, ShieldCheck, Info, Sparkles } from "lucide-react";
+import { Settings, Save, RotateCcw, ShieldCheck, Info, Sparkles, Layers } from "lucide-react";
 import { DEFAULT_SETTINGS, IndicatorSettings } from "../utils/lotteryEngine";
 import { saveStrategyConfig } from "../firebase";
+import { ZODIAC_MAPPING } from "../utils/zodiacConfig";
 
 interface ConfigTabProps {
   activeSettings: any;
@@ -22,6 +23,108 @@ export default function ConfigTab({ activeSettings, setActiveSettings }: ConfigT
     setActiveSettings((prev: any) => ({
       ...prev,
       recommendCount: count
+    }));
+  };
+
+  const handleLunarYearChange = (year: number) => {
+    setActiveSettings((prev: any) => ({
+      ...prev,
+      lunarYear: year
+    }));
+  };
+
+  const getZodiacForYear = (year: number) => {
+    const ZODIAC_ORDER = ["鼠", "牛", "虎", "兔", "龙", "蛇", "马", "羊", "猴", "鸡", "狗", "猪"];
+    const baseYear = 2026;
+    const baseIdx = 6; // 2026 马
+    let idx = (baseIdx + (year - baseYear)) % 12;
+    if (idx < 0) idx += 12;
+    return ZODIAC_ORDER[idx];
+  };
+
+  const handleModeChange = (mode: "auto" | "custom") => {
+    setActiveSettings((prev: any) => {
+      const next: any = {
+        ...prev,
+        zodiacMode: mode
+      };
+      if (mode === "custom" && !prev.customZodiacMapping) {
+        // 自动初始化自定义映射（从当前公式生成）
+        const ZODIAC_ORDER = ["鼠", "牛", "虎", "兔", "龙", "蛇", "马", "羊", "猴", "鸡", "狗", "猪"];
+        const activeYear = prev.lunarYear ?? 2026;
+        const baseYear = 2026;
+        const baseIdx = 6;
+        let activeIdx = (baseIdx + (activeYear - baseYear)) % 12;
+        if (activeIdx < 0) activeIdx += 12;
+
+        const importedMapping: Record<string, number[]> = {};
+        ZODIAC_ORDER.forEach(z => {
+          importedMapping[z] = [];
+        });
+
+        for (let num = 1; num <= 49; num++) {
+          const offset = num - 1;
+          const zIdx = (activeIdx - (offset % 12) + 12) % 12;
+          const zodiac = ZODIAC_ORDER[zIdx];
+          importedMapping[zodiac].push(num);
+        }
+        next.customZodiacMapping = importedMapping;
+      }
+      return next;
+    });
+  };
+
+  const handleCustomMappingChange = (zodiac: string, valueStr: string) => {
+    // 解析逗号/空格分隔的数字列表
+    const parsedNums = valueStr
+      .split(/[,，\s]+/)
+      .map(s => parseInt(s.trim(), 10))
+      .filter(n => !isNaN(n) && n >= 1 && n <= 49);
+
+    const uniqueNums = Array.from(new Set(parsedNums)).sort((a, b) => a - b);
+
+    setActiveSettings((prev: any) => ({
+      ...prev,
+      customZodiacMapping: {
+        ...(prev.customZodiacMapping || {}),
+        [zodiac]: uniqueNums
+      }
+    }));
+  };
+
+  const handleImportFromFormula = () => {
+    const ZODIAC_ORDER = ["鼠", "牛", "虎", "兔", "龙", "蛇", "马", "羊", "猴", "鸡", "狗", "猪"];
+    const activeYear = settings.lunarYear ?? 2026;
+    const baseYear = 2026;
+    const baseIdx = 6;
+    let activeIdx = (baseIdx + (activeYear - baseYear)) % 12;
+    if (activeIdx < 0) activeIdx += 12;
+
+    const importedMapping: Record<string, number[]> = {};
+    ZODIAC_ORDER.forEach(z => {
+      importedMapping[z] = [];
+    });
+
+    for (let num = 1; num <= 49; num++) {
+      const offset = num - 1;
+      const zIdx = (activeIdx - (offset % 12) + 12) % 12;
+      const zodiac = ZODIAC_ORDER[zIdx];
+      importedMapping[zodiac].push(num);
+    }
+
+    setActiveSettings((prev: any) => ({
+      ...prev,
+      customZodiacMapping: importedMapping
+    }));
+    setMessage("已根据当前选择年份的物理公式成功重置自定义号码映射！编辑完毕后，请点击上方‘保存因子配置’使设置全局生效。");
+    setTimeout(() => setMessage(""), 5000);
+  };
+
+  const handleBacktestWindowChange = (windowVal: string) => {
+    const parsedVal = windowVal === "all" ? null : parseInt(windowVal, 10);
+    setActiveSettings((prev: any) => ({
+      ...prev,
+      backtestWindow: parsedVal
     }));
   };
 
@@ -224,6 +327,200 @@ export default function ConfigTab({ activeSettings, setActiveSettings }: ConfigT
         </div>
       )}
 
+      {/* 岁次更替：当前农历年份与生肖对应关系 */}
+      <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-xs space-y-5">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center border-b border-slate-100 pb-4 gap-3">
+          <div className="space-y-1">
+            <h4 className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
+              <Layers className="text-slate-800 w-4.5 h-4.5" />
+              生肖号码规则设置 (Zodiac & Numbers Mapping)
+            </h4>
+            <p className="text-xs text-gray-400">
+              设置香港特码的生肖与号码（1-49）对应映射关系。支持按岁次公式自动演进，或根据特定规则手动自定义。
+            </p>
+          </div>
+          
+          {/* 模式选择 */}
+          <div className="flex bg-slate-100 p-1 rounded-lg border border-slate-200 shrink-0">
+            <button
+              type="button"
+              onClick={() => handleModeChange("auto")}
+              className={`px-3 py-1 text-xs font-bold rounded-md transition-all cursor-pointer ${
+                (settings.zodiacMode ?? "auto") === "auto"
+                  ? "bg-white text-slate-900 shadow-2xs border border-slate-200/50"
+                  : "text-gray-500 hover:text-gray-900"
+              }`}
+            >
+              按岁次自动推导
+            </button>
+            <button
+              type="button"
+              onClick={() => handleModeChange("custom")}
+              className={`px-3 py-1 text-xs font-bold rounded-md transition-all cursor-pointer ${
+                (settings.zodiacMode ?? "auto") === "custom"
+                  ? "bg-white text-slate-900 shadow-2xs border border-slate-200/50"
+                  : "text-gray-500 hover:text-gray-900"
+              }`}
+            >
+              完全手动自定义
+            </button>
+          </div>
+        </div>
+
+        {/* 1. 自动岁次模式 UI */}
+        {(settings.zodiacMode ?? "auto") === "auto" && (
+          <div className="space-y-4">
+            <div className="flex flex-col lg:flex-row lg:justify-between lg:items-center gap-4 p-4 bg-slate-50/50 rounded-xl border border-slate-100">
+              <div className="space-y-1">
+                <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                  选择农历年份：
+                </span>
+                <p className="text-[11px] text-gray-400">
+                  支持自定义 2020 - 2036 宽幅年份（自动按逆时针岁次分配，本命年占据号码 1, 13, 25, 37, 49）。
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3 shrink-0">
+                <select
+                  value={settings.lunarYear ?? 2026}
+                  onChange={(e) => handleLunarYearChange(Number(e.target.value))}
+                  className="px-3 py-1.5 bg-white border border-slate-200 text-slate-800 text-xs font-bold rounded-lg cursor-pointer shadow-2xs"
+                >
+                  {Array.from({ length: 17 }, (_, i) => 2020 + i).map((year) => (
+                    <option key={year} value={year}>
+                      {year} 年 ({getZodiacForYear(year)}年)
+                    </option>
+                  ))}
+                </select>
+
+                <div className="h-4 w-px bg-slate-200 hidden sm:block" />
+
+                <div className="flex flex-wrap gap-1.5">
+                  {[2025, 2026, 2027, 2028, 2029].map((year) => {
+                    const yearLabels: Record<number, string> = {
+                      2025: "2025 蛇年",
+                      2026: "2026 马年",
+                      2027: "2027 羊年",
+                      2028: "2028 猴年",
+                      2029: "2029 鸡年"
+                    };
+                    const isActive = (settings.lunarYear ?? 2026) === year;
+                    return (
+                      <button
+                        key={year}
+                        type="button"
+                        onClick={() => handleLunarYearChange(year)}
+                        className={`px-2 py-1 text-[11px] font-bold rounded-md transition-all cursor-pointer ${
+                          isActive
+                            ? "bg-slate-900 text-white shadow-sm"
+                            : "bg-slate-100 text-gray-500 hover:bg-slate-200 border border-slate-200/50"
+                        }`}
+                      >
+                        {yearLabels[year]}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* 自动对应号码实时预览 */}
+            <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
+              <div className="text-[11px] font-bold text-slate-500 mb-3 flex items-center gap-1">
+                <Info className="w-3.5 h-3.5 text-slate-400" />
+                <span>当前设置【{settings.lunarYear ?? 2026} 年】的【生肖 ➔ 号码】对应关系公式预览：</span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                {Object.entries(ZODIAC_MAPPING).map(([zodiac, nums]) => (
+                  <div key={zodiac} className="bg-white p-2.5 rounded-lg border border-gray-200/60 shadow-2xs flex flex-col gap-1.5">
+                    <div className="flex justify-between items-center">
+                      <span className="text-xs font-bold text-slate-800">{zodiac}</span>
+                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-sm bg-slate-100 text-slate-500">
+                        {nums.length}码
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      {nums.map((n) => (
+                        <span
+                          key={n}
+                          className="text-[10px] font-mono font-bold w-5 h-5 flex items-center justify-center rounded-full bg-slate-100 text-slate-600 border border-slate-200/40"
+                        >
+                          {String(n).padStart(2, "0")}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 2. 手动自定义模式 UI */}
+        {(settings.zodiacMode ?? "auto") === "custom" && (
+          <div className="space-y-4">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-4 bg-amber-50/60 border border-amber-100 rounded-xl">
+              <div className="space-y-1">
+                <span className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
+                  <Sparkles className="w-4 h-4 text-amber-600" />
+                  当前处于“完全手动自定义号码”模式
+                </span>
+                <p className="text-[11px] text-amber-700">
+                  您可以直接在下方输入框中手动键入或编辑12生肖对应的号码（1-49，使用空格或逗号分隔）。
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleImportFromFormula}
+                className="px-3 py-1.5 bg-white border border-amber-200 text-amber-800 text-xs font-bold rounded-lg shadow-2xs hover:bg-amber-50 transition-all cursor-pointer whitespace-nowrap"
+              >
+                从公式一键导入现有配置
+              </button>
+            </div>
+
+            {/* 12生肖编辑输入框网格 */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {["鼠", "牛", "虎", "兔", "龙", "蛇", "马", "羊", "猴", "鸡", "狗", "猪"].map((zodiac) => {
+                const nums = settings.customZodiacMapping?.[zodiac] || [];
+                const valueStr = nums.join(", ");
+                return (
+                  <div key={zodiac} className="bg-slate-50/50 p-3 rounded-xl border border-slate-100 flex flex-col gap-2">
+                    <div className="flex justify-between items-center">
+                      <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                        <span className="w-5 h-5 flex items-center justify-center rounded-md bg-slate-900 text-white font-mono text-[11px]">
+                          {zodiac}
+                        </span>
+                        <span>{zodiac}年专属号码</span>
+                      </span>
+                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-sm bg-slate-100 text-slate-500">
+                        已分配 {nums.length} 码
+                      </span>
+                    </div>
+                    <input
+                      type="text"
+                      value={valueStr}
+                      onChange={(e) => handleCustomMappingChange(zodiac, e.target.value)}
+                      placeholder="输入号码，如：1, 13, 25, 37, 49"
+                      className="w-full px-2.5 py-1.5 bg-white border border-slate-200 text-slate-700 text-xs font-bold rounded-lg shadow-2xs focus:border-slate-400 focus:outline-hidden"
+                    />
+                    <div className="flex flex-wrap gap-1 mt-0.5 min-h-[20px]">
+                      {nums.map((n) => (
+                        <span
+                          key={n}
+                          className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-white text-slate-500 border border-slate-200/40"
+                        >
+                          {String(n).padStart(2, "0")}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* 推荐生肖个数自由选择 */}
       <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-xs space-y-4">
         <div className="flex flex-col lg:flex-row lg:justify-between lg:items-center gap-4">
@@ -255,6 +552,47 @@ export default function ConfigTab({ activeSettings, setActiveSettings }: ConfigT
                   <span className={`text-[9px] font-medium ${isActive ? "text-emerald-500/80" : "text-gray-400"}`}>
                     基准 {randomRate}%
                   </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* 回测数据历史跨度控制 */}
+      <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-xs space-y-4">
+        <div className="flex flex-col lg:flex-row lg:justify-between lg:items-center gap-4">
+          <div className="space-y-1">
+            <h4 className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
+              <RotateCcw className="text-indigo-600 w-4.5 h-4.5" />
+              回测数据历史跨度控制 (Backtest History Window Size)
+            </h4>
+            <p className="text-xs text-gray-400">
+              您可以控制滚动回测算法所调取的最大历史样本区间。如果只关心最新短线走势，缩短跨度可以更好观察最新几期的命中活跃度；如果想评估因子的跨年度宏观稳定性，建议使用“全部期数”。
+            </p>
+          </div>
+          
+          <div className="flex bg-slate-100 p-1 rounded-lg border border-slate-200/50 self-start lg:self-center shrink-0 gap-0.5">
+            {[
+              { label: "全部期数", value: "all" },
+              { label: "最近 100 期", value: "100" },
+              { label: "最近 50 期", value: "50" },
+              { label: "最近 30 期", value: "30" }
+            ].map((option) => {
+              const currentValStr = settings.backtestWindow === null || settings.backtestWindow === undefined ? "all" : String(settings.backtestWindow);
+              const isActive = currentValStr === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => handleBacktestWindowChange(option.value)}
+                  className={`px-3 py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${
+                    isActive
+                      ? "bg-white text-indigo-600 shadow-2xs border border-slate-200/30"
+                      : "text-gray-500 hover:text-gray-900"
+                  }`}
+                >
+                  {option.label}
                 </button>
               );
             })}

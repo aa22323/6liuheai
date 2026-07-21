@@ -69,9 +69,13 @@ export default function BacktestTab({ history, activeSettings, setActiveSettings
     }, 4500);
   };
 
-  // 动态计算回测期数区间
+  // 动态计算回测期数区间（支持历史跨度设置）
   const uniquePeriods = Array.from(new Set(history.map(r => r.period))).sort((a, b) => a - b);
-  const testPeriods = uniquePeriods.slice(30); // 前30期用作初始统计特征，之后的用于滚动测试
+  const baseTestPeriods = uniquePeriods.slice(30); // 前30期用作初始统计特征，之后的用于滚动测试
+  const backtestWindow = activeSettings?.backtestWindow;
+  const testPeriods = backtestWindow && baseTestPeriods.length > backtestWindow
+    ? baseTestPeriods.slice(baseTestPeriods.length - backtestWindow)
+    : baseTestPeriods;
   const totalTestPeriods = testPeriods.length || 1;
   const testStartPeriod = testPeriods[0] || 0;
   const testEndPeriod = testPeriods[testPeriods.length - 1] || 0;

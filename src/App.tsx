@@ -7,6 +7,7 @@ import { useState, useEffect } from "react";
 import { Sparkles, BarChart3, Settings, Database, FileCode, Landmark, RefreshCw, Layers } from "lucide-react";
 import { HistoryRecord, DEFAULT_SETTINGS } from "./utils/lotteryEngine";
 import { getHistoryRecords, getStrategyConfig } from "./firebase";
+import { updateZodiacMapping } from "./utils/zodiacConfig";
 
 // Import custom modular components
 import PredictionTab from "./components/PredictionTab";
@@ -15,6 +16,26 @@ import StatisticsTab from "./components/StatisticsTab";
 import ConfigTab from "./components/ConfigTab";
 import DataTab from "./components/DataTab";
 import PythonTab from "./components/PythonTab";
+
+const getZodiacName = (year: number) => {
+  const ZODIAC_ORDER = ["鼠", "牛", "虎", "兔", "龙", "蛇", "马", "羊", "猴", "鸡", "狗", "猪"];
+  const baseYear = 2026;
+  const baseIdx = 6; // 2026 马
+  let idx = (baseIdx + (year - baseYear)) % 12;
+  if (idx < 0) idx += 12;
+  return ZODIAC_ORDER[idx];
+};
+
+const getLunisolarName = (year: number) => {
+  const stems = ["甲", "乙", "丙", "丁", "戊", "己", "庚", "辛", "壬", "癸"];
+  const branches = ["子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"];
+  const offset = year - 2026;
+  let stemIdx = (2 + offset) % 10;
+  if (stemIdx < 0) stemIdx += 10;
+  let branchIdx = (6 + offset) % 12;
+  if (branchIdx < 0) branchIdx += 12;
+  return `${stems[stemIdx]}${branches[branchIdx]}${getZodiacName(year)}年`;
+};
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<string>("predict");
@@ -51,6 +72,15 @@ export default function App() {
       });
   }, []);
 
+  // 实时重构前端特码与生肖对应关系（在 Render 期间同步更新，防止 React useEffect 异步滞后导致预览不同步）
+  if (activeSettings) {
+    if (activeSettings.zodiacMode === "custom" && activeSettings.customZodiacMapping) {
+      updateZodiacMapping(activeSettings.customZodiacMapping);
+    } else if (activeSettings.lunarYear) {
+      updateZodiacMapping(activeSettings.lunarYear);
+    }
+  }
+
   return (
     <div className="min-h-screen bg-slate-50/70 text-slate-800 font-sans flex flex-col antialiased">
       {/* 顶部主横幅 / 导航 */}
@@ -80,7 +110,11 @@ export default function App() {
               <div className="hidden sm:flex items-center gap-4">
                 <div className="flex items-center gap-1.5 text-slate-600 bg-slate-100 px-3 py-1.5 rounded-lg">
                   <Landmark className="w-3.5 h-3.5" />
-                  <span>2026丙午马年开奖映射表</span>
+                  <span className="font-bold">
+                    {activeSettings?.zodiacMode === "custom"
+                      ? "自定义号码开奖映射表"
+                      : `${activeSettings?.lunarYear ?? 2026}年 ${getLunisolarName(activeSettings?.lunarYear ?? 2026)}开奖映射表`}
+                  </span>
                 </div>
                 
                 <div className="flex items-center gap-1.5 text-emerald-700 bg-emerald-50 border border-emerald-100 px-3 py-1.5 rounded-lg">

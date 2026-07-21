@@ -19,10 +19,18 @@ export interface IndicatorSettings {
   indicators: Record<string, boolean>;
   weights: Record<string, number>;
   recommendCount?: number;
+  lunarYear?: number;
+  zodiacMode?: "auto" | "custom";
+  customZodiacMapping?: Record<string, number[]> | null;
+  backtestWindow?: number | null;
 }
 
 export const DEFAULT_SETTINGS: IndicatorSettings = {
   recommendCount: 5,
+  lunarYear: 2026,
+  zodiacMode: "auto",
+  customZodiacMapping: null,
+  backtestWindow: null,
   indicators: {
     ENABLE_HISTORICAL_HEAT: true,
     ENABLE_RECENT_HEAT_10: true,

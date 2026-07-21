@@ -11,7 +11,7 @@ import { fileURLToPath } from "url";
 import { initializeApp } from "firebase/app";
 import { getFirestore, doc, setDoc, getDoc, getDocs, collection, query, orderBy, deleteDoc, writeBatch } from "firebase/firestore";
 import { precomputeStats, runWalkForwardBacktest, computeZodiacScores, DEFAULT_SETTINGS, enrichData } from "./src/utils/lotteryEngine";
-import { ZODIAC_MAPPING } from "./src/utils/zodiacConfig";
+import { ZODIAC_MAPPING, updateZodiacMapping } from "./src/utils/zodiacConfig";
 
 // Node ES Module / CommonJS environment-agnostic path resolution setup
 let _filename = "";
@@ -231,6 +231,16 @@ app.use(express.json());
         }
         await setDoc(configDocRef, memoryConfig);
         console.log("[Firebase Sync] 成功将初始种子配置保存至 Firestore！");
+      }
+      
+      // 动态更新服务器端的号码与生肖对应关系
+      if (memoryConfig?.zodiacMode === "custom" && memoryConfig?.customZodiacMapping) {
+        updateZodiacMapping(memoryConfig.customZodiacMapping);
+        console.log("[Zodiac Mapping] 已根据当前策略中的手动自定义配置更新生肖映射关系");
+      } else {
+        const activeYear = memoryConfig?.lunarYear || 2026;
+        updateZodiacMapping(activeYear);
+        console.log(`[Zodiac Mapping] 已根据当前策略年份更新生肖对应关系: ${activeYear} 年`);
       }
 
       // 3. 同步预测结果
@@ -494,9 +504,26 @@ app.use(express.json());
   // API Route: 保存配置 (保存至云端 Firestore 和内存)
   app.post("/api/config", async (req, res) => {
     try {
-      const { indicators, weights, recommendCount } = req.body;
-      const data = { indicators, weights, recommendCount: recommendCount ?? 5 };
+      const { indicators, weights, recommendCount, lunarYear, zodiacMode, customZodiacMapping, backtestWindow } = req.body;
+      const data = { 
+        indicators, 
+        weights, 
+        recommendCount: recommendCount ?? 5,
+        lunarYear: lunarYear ?? 2026,
+        zodiacMode: zodiacMode ?? "auto",
+        customZodiacMapping: customZodiacMapping ?? null,
+        backtestWindow: backtestWindow ?? null
+      };
       memoryConfig = data;
+      
+      // 实时更新当前进程内的号码与生肖对应映射
+      if (data.zodiacMode === "custom" && data.customZodiacMapping) {
+        updateZodiacMapping(data.customZodiacMapping);
+        console.log("[Zodiac Mapping] 接口收到保存配置，实时更新生肖映射关系为自定义模式");
+      } else {
+        updateZodiacMapping(data.lunarYear);
+        console.log(`[Zodiac Mapping] 接口收到保存配置，实时更新生肖映射关系为: ${data.lunarYear} 年`);
+      }
       
       if (db) {
         try {
