@@ -256,21 +256,30 @@ export async function getHistoryRecords(): Promise<HistoryRecord[]> {
 }
 
 /**
- * Add a new lottery record to Firestore.
+ * Add a new lottery record to Firestore. Supports optional overwrite.
  */
-export async function addHistoryRecord(period: number, num: number, zodiac: string): Promise<void> {
+export async function addHistoryRecord(period: number, num: number, zodiac: string, overwrite = false): Promise<void> {
   try {
     // 1. Try Backend API
     const response = await fetch("/api/history", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ period, number: num, zodiac })
+      body: JSON.stringify({ period, number: num, zodiac, overwrite })
     });
     if (response.ok) {
       console.log("[Firebase client] Added history record via backend API.");
       return;
+    } else {
+      const errRes = await response.json().catch(() => ({}));
+      if (errRes.isExisting) {
+        throw new Error("EXISTING_RECORD");
+      }
+      throw new Error(errRes.error || "写入失败");
     }
   } catch (e: any) {
+    if (e.message === "EXISTING_RECORD") {
+      throw e;
+    }
     console.warn("[Firebase client API Warning] Failed to add via API, writing directly to Firestore:", e.message);
   }
 
@@ -282,6 +291,30 @@ export async function addHistoryRecord(period: number, num: number, zodiac: stri
     zodiac,
     createdAt: new Date().toISOString()
   });
+}
+
+/**
+ * Delete a specific lottery record from Firestore and backend.
+ */
+export async function deleteSpecificHistoryRecord(period: number): Promise<void> {
+  try {
+    // 1. Try Backend API
+    const response = await fetch("/api/history/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ period })
+    });
+    if (response.ok) {
+      console.log(`[Firebase client] Deleted history record for period ${period} via backend API.`);
+      return;
+    }
+  } catch (e: any) {
+    console.warn("[Firebase client API Warning] Failed to delete specific record via API, deleting directly from Firestore:", e.message);
+  }
+
+  // 2. Direct Firestore fallback
+  const docRef = doc(db, "history", String(period));
+  await deleteDoc(docRef);
 }
 
 /**

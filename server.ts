@@ -310,10 +310,10 @@ app.use(express.json());
     }
   });
 
-  // API Route: 添加新的历史开奖记录
+  // API Route: 添加新的历史开奖记录 (支持覆盖更新)
   app.post("/api/history", async (req, res) => {
     try {
-      const { period, number: num, zodiac } = req.body;
+      const { period, number: num, zodiac, overwrite } = req.body;
       const parsedPeriod = parseInt(period, 10);
       const parsedNumber = parseInt(num, 10);
       
@@ -331,13 +331,24 @@ app.use(express.json());
 
       // 验证期数是否已存在
       const records = getHistoryData();
-      if (records.some(r => r.period === parsedPeriod)) {
-        return res.status(400).json({ success: false, error: `第 ${parsedPeriod} 期的开奖数据已经存在。` });
+      const existingIndex = memoryHistory.findIndex(r => r.period === parsedPeriod);
+      const isExisting = existingIndex !== -1;
+
+      if (isExisting && !overwrite) {
+        return res.status(400).json({ 
+          success: false, 
+          error: `第 ${parsedPeriod} 期的开奖数据已经存在。`, 
+          isExisting: true 
+        });
       }
 
-      // 1. 更新内存缓存
-      const newRecord = { period: parsedPeriod, number: parsedNumber, zodiac: zodiac.trim() };
-      memoryHistory.push(newRecord);
+      // 1. 更新内存缓存 (覆盖或追加)
+      const updatedRecord = { period: parsedPeriod, number: parsedNumber, zodiac: zodiac.trim() };
+      if (isExisting) {
+        memoryHistory[existingIndex] = updatedRecord;
+      } else {
+        memoryHistory.push(updatedRecord);
+      }
       memoryHistory.sort((a, b) => a.period - b.period);
 
       // 2. 异步同步保存至云端 Firestore 数据库 (后台执行，避免阻塞接口)
@@ -350,14 +361,55 @@ app.use(express.json());
           createdAt: new Date().toISOString()
         })
           .then(() => {
-            console.log(`[Firebase] 成功将第 ${parsedPeriod} 期数据同步保存至云端 Firestore。`);
+            console.log(`[Firebase] 成功将第 ${parsedPeriod} 期数据同步保存至云端 Firestore (覆盖/新建)。`);
           })
           .catch((error: any) => {
             console.error(`[Firebase Error] 异步同步第 ${parsedPeriod} 期数据失败:`, error.message);
           });
       }
 
-      res.json({ success: true, message: "开奖数据添加成功，并已同步至云端！" });
+      res.json({ 
+        success: true, 
+        message: isExisting 
+          ? `第 ${parsedPeriod} 期的开奖数据已成功更新并覆盖！` 
+          : "开奖数据添加成功，并已同步至云端！" 
+      });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  // API Route: 删除特定期数的开奖记录
+  app.post("/api/history/delete", async (req, res) => {
+    try {
+      const { period } = req.body;
+      const parsedPeriod = parseInt(period, 10);
+      
+      if (isNaN(parsedPeriod) || parsedPeriod <= 0) {
+        return res.status(400).json({ success: false, error: "无效的期数。" });
+      }
+
+      const existingIndex = memoryHistory.findIndex(r => r.period === parsedPeriod);
+      if (existingIndex === -1) {
+        return res.status(404).json({ success: false, error: `没有找到第 ${parsedPeriod} 期的开奖记录。` });
+      }
+
+      // 从内存移除
+      memoryHistory.splice(existingIndex, 1);
+
+      // 从 Firestore 移除
+      if (db) {
+        const docRef = doc(db, "history", String(parsedPeriod));
+        deleteDoc(docRef)
+          .then(() => {
+            console.log(`[Firebase] 成功将第 ${parsedPeriod} 期数据从云端 Firestore 移除。`);
+          })
+          .catch((error: any) => {
+            console.error(`[Firebase Error] 异步删除第 ${parsedPeriod} 期数据失败:`, error.message);
+          });
+      }
+
+      res.json({ success: true, message: `第 ${parsedPeriod} 期的历史记录已成功删除并同步到云端。` });
     } catch (e: any) {
       res.status(500).json({ success: false, error: e.message });
     }

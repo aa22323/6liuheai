@@ -4,9 +4,9 @@
  */
 
 import { useState, useEffect, FormEvent } from "react";
-import { Table, Search, ShieldCheck, Play, ArrowLeft, ArrowRight, Database, Plus, Trash2, HelpCircle } from "lucide-react";
+import { Table, Search, ShieldCheck, Play, ArrowLeft, ArrowRight, Database, Plus, Trash2, HelpCircle, Edit } from "lucide-react";
 import { HistoryRecord } from "../utils/lotteryEngine";
-import { addHistoryRecord, deleteHistoryRecord } from "../firebase";
+import { addHistoryRecord, deleteHistoryRecord, deleteSpecificHistoryRecord } from "../firebase";
 
 interface DataTabProps {
   history: HistoryRecord[];
@@ -43,8 +43,8 @@ export default function DataTab({ history, onRefresh }: DataTabProps) {
     }
   }, [history]);
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (e: FormEvent, isOverwriting = false) => {
+    if (e) e.preventDefault();
     setSubmitError("");
     setSubmitSuccess("");
 
@@ -66,14 +66,25 @@ export default function DataTab({ history, onRefresh }: DataTabProps) {
 
     setSubmitting(true);
     try {
-      await addHistoryRecord(periodNum, drawNum, newZodiac);
-      setSubmitSuccess(`第 ${periodNum} 期（号码: ${drawNum}，生肖: ${newZodiac}）开奖数据已成功存入 Firestore 数据库！`);
+      await addHistoryRecord(periodNum, drawNum, newZodiac, isOverwriting);
+      setSubmitSuccess(`第 ${periodNum} 期（号码: ${drawNum}，生肖: ${newZodiac}）开奖数据已成功${isOverwriting ? '修改并覆盖' : '存入'} Firestore 数据库！`);
       setNewNumber("");
       setNewZodiac("");
       setNewPeriod((periodNum + 1).toString());
       if (onRefresh) onRefresh();
     } catch (err: any) {
-      setSubmitError(`录入失败: ${err.message}`);
+      if (err.message === "EXISTING_RECORD") {
+        const confirmMsg = `第 ${periodNum} 期的开奖数据已经存在。\n\n您是否想要用当前输入的新值（号码: ${drawNum}，生肖: ${newZodiac}）覆盖并修改第 ${periodNum} 期的原有数据？`;
+        if (window.confirm(confirmMsg)) {
+          setSubmitting(false);
+          await handleSubmit(e, true);
+          return;
+        } else {
+          setSubmitError(`操作已取消。第 ${periodNum} 期数据保持不变。`);
+        }
+      } else {
+        setSubmitError(`录入失败: ${err.message}`);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -103,6 +114,40 @@ export default function DataTab({ history, onRefresh }: DataTabProps) {
       setSubmitError(`删除失败: ${err.message}`);
     } finally {
       setDeletingLast(false);
+    }
+  };
+
+  const handleEditRow = (item: HistoryRecord) => {
+    setNewPeriod(item.period.toString());
+    setNewNumber(item.number.toString());
+    setNewZodiac(item.zodiac);
+    
+    const formElement = document.getElementById("add-next-form");
+    if (formElement) {
+      formElement.scrollIntoView({ behavior: "smooth" });
+    }
+    
+    setSubmitSuccess(`已成功加载第 ${item.period} 期数据到上方表单中。您可以修改号码或生肖后点击“💾 确认保存修改”。`);
+    setSubmitError("");
+  };
+
+  const handleDeleteRow = async (period: number) => {
+    const confirmMsg = `您确定要彻底删除第 ${period} 期的开奖数据吗？该操作将永久修改 Firestore 数据库且无法恢复！`;
+    if (!window.confirm(confirmMsg)) {
+      return;
+    }
+
+    setSubmitting(true);
+    setSubmitError("");
+    setSubmitSuccess("");
+    try {
+      await deleteSpecificHistoryRecord(period);
+      setSubmitSuccess(`第 ${period} 期的开奖记录已成功从云端和本地数据库中彻底删除。`);
+      if (onRefresh) onRefresh();
+    } catch (err: any) {
+      setSubmitError(`删除失败: ${err.message}`);
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -213,7 +258,7 @@ export default function DataTab({ history, onRefresh }: DataTabProps) {
       )}
 
       {/* 录入下一期开奖结果 */}
-      <div className="bg-white border border-gray-100 rounded-2xl shadow-xs overflow-hidden">
+      <div id="add-next-form" className="bg-white border border-gray-100 rounded-2xl shadow-xs overflow-hidden">
         <div className="p-5 border-b border-gray-100 bg-slate-50/50 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 bg-emerald-50 text-emerald-600 rounded-lg flex items-center justify-center font-bold">
@@ -371,12 +416,13 @@ export default function DataTab({ history, onRefresh }: DataTabProps) {
                 <th className="px-6 py-4">单双特征</th>
                 <th className="px-6 py-4">大小特征</th>
                 <th className="px-6 py-4">尾数</th>
+                <th className="px-6 py-4 text-right">操作</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50 text-xs font-semibold text-gray-700">
               {paginatedData.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="text-center py-12 text-gray-400 font-medium">
+                  <td colSpan={8} className="text-center py-12 text-gray-400 font-medium">
                     没有找到符合条件的开奖记录...
                   </td>
                 </tr>
@@ -417,6 +463,26 @@ export default function DataTab({ history, onRefresh }: DataTabProps) {
                     </td>
                     <td className="px-6 py-4 font-mono text-gray-400">
                       {item.tail} 尾
+                    </td>
+                    <td className="px-6 py-4 text-right space-x-1.5 whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => handleEditRow(item)}
+                        className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-600 hover:text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-1.5 rounded-lg transition-all cursor-pointer"
+                        title="编辑/修改此期数据"
+                      >
+                        <Edit className="w-3 h-3" />
+                        <span>编辑</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteRow(item.period)}
+                        className="inline-flex items-center gap-1 text-[11px] font-bold text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 px-2.5 py-1.5 rounded-lg transition-all cursor-pointer"
+                        title="彻底删除此期数据"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        <span>删除</span>
+                      </button>
                     </td>
                   </tr>
                 ))
