@@ -753,115 +753,226 @@ export function runWalkForwardBacktest(
 /**
  * 贪心指标选择器与权重优化器
  */
+export interface WeightChangeItem {
+  key: string;
+  weightKey: string;
+  name: string;
+  oldWeight: number;
+  newWeight: number;
+  oldEnabled: boolean;
+  newEnabled: boolean;
+  impact: number;
+}
+
+export interface OptimizationResult {
+  settings: IndicatorSettings;
+  initialHitRate: number;
+  bestHitRate: number;
+  improvement: number;
+  weightChanges: WeightChangeItem[];
+  logs: string[];
+}
+
+/**
+ * 因子键到权重键的标准映射
+ */
+export const INDICATOR_TO_WEIGHT_MAP: Record<string, string> = {
+  ENABLE_HISTORICAL_HEAT: "HISTORICAL_HEAT_WEIGHT",
+  ENABLE_RECENT_HEAT_10: "RECENT_HEAT_10_WEIGHT",
+  ENABLE_RECENT_HEAT_20: "RECENT_HEAT_20_WEIGHT",
+  ENABLE_RECENT_HEAT_50: "RECENT_HEAT_50_WEIGHT",
+  ENABLE_MISSING_VALUE: "MISSING_VALUE_WEIGHT",
+  ENABLE_AVERAGE_INTERVAL: "AVERAGE_INTERVAL_WEIGHT",
+  ENABLE_COLD_HOT_BALANCE: "COLD_HOT_BALANCE_WEIGHT",
+  ENABLE_MARKOV: "MARKOV_WEIGHT",
+  ENABLE_WAVE_REVERSION: "WAVE_REVERSION_WEIGHT",
+  ENABLE_ODD_EVEN_REVERSION: "ODD_EVEN_REVERSION_WEIGHT",
+  ENABLE_SIZE_REVERSION: "SIZE_REVERSION_WEIGHT",
+  ENABLE_TAIL_REVERSION: "TAIL_REVERSION_WEIGHT",
+  ENABLE_CONSECUTIVE_PENALTY: "CONSECUTIVE_PENALTY_WEIGHT",
+  ENABLE_MAX_MISSING_RECOVERY: "MAX_MISSING_RECOVERY_WEIGHT",
+  ENABLE_CYCLE_ANALYSIS: "CYCLE_ANALYSIS_WEIGHT",
+  ENABLE_SIMILAR_WINDOW: "SIMILAR_WINDOW_WEIGHT",
+  ENABLE_WUXING_HARMONY: "WUXING_HARMONY_WEIGHT",
+  ENABLE_ZODIAC_HARMONY: "ZODIAC_HARMONY_WEIGHT",
+  ENABLE_HESHU_REVERSION: "HESHU_REVERSION_WEIGHT",
+  ENABLE_DECAY_MARKOV: "DECAY_MARKOV_WEIGHT",
+  ENABLE_ATTRIBUTE_TRANSITION: "ATTRIBUTE_TRANSITION_WEIGHT"
+};
+
+/**
+ * 因子权重智能优化器 (真实坐标下降与多轮参数自适应寻优)
+ */
 export function optimizeSettings(
   df: HistoryRecord[],
   startPeriod = 151,
   endPeriod = 191,
-  onProgress?: (msg: string) => void
-): { settings: IndicatorSettings; bestHitRate: number } {
+  baseSettings?: IndicatorSettings,
+  onStepProgress?: (step: number, total: number, msg: string) => void
+): OptimizationResult {
+  const logs: string[] = [];
   const log = (msg: string) => {
-    if (onProgress) onProgress(msg);
+    logs.push(msg);
     console.log(msg);
   };
 
-  log("开始自动模型寻优 (TypeScript版)...");
+  const initialSettings: IndicatorSettings = JSON.parse(
+    JSON.stringify(baseSettings || DEFAULT_SETTINGS)
+  );
 
-  // 1. Initialize setting: All indicators disabled
-  const currentSettings: IndicatorSettings = {
-    indicators: {},
-    weights: { ...DEFAULT_SETTINGS.weights }
-  };
-  Object.keys(DEFAULT_SETTINGS.indicators).forEach(k => {
-    currentSettings.indicators[k] = false;
-  });
+  log(`🚀 启动 AI 因子权重智能优化引擎...`);
+  log(`📊 滚动训练区间: 第 ${startPeriod} 期 ➔ 第 ${endPeriod} 期`);
 
-  // Base hit rate with all disabled
-  let bestResult = runWalkForwardBacktest(df, startPeriod, endPeriod, currentSettings);
-  let bestHitRate = bestResult.hitRate;
-  log(`初始基础状态 (指标全部关闭) 命中率: ${bestHitRate.toFixed(2)}%`);
+  // 计算初始状态基准率
+  const baseResult = runWalkForwardBacktest(df, startPeriod, endPeriod, initialSettings);
+  const initialHitRate = baseResult.hitRate;
+  let bestHitRate = initialHitRate;
 
+  log(`📌 初始策略基准命中率: ${initialHitRate.toFixed(2)}%`);
+
+  const currentSettings: IndicatorSettings = JSON.parse(JSON.stringify(initialSettings));
   const indicatorKeys = Object.keys(DEFAULT_SETTINGS.indicators);
 
-  // 2. Toggle indicators one by one greedily
-  indicatorKeys.forEach(ind => {
-    const trialSettings: IndicatorSettings = {
-      indicators: { ...currentSettings.indicators },
-      weights: { ...currentSettings.weights }
-    };
-    trialSettings.indicators[ind] = true;
+  // 第一阶段：因子开关贪心筛选 (Feature Switch Selection)
+  log(`\n🔍 [阶段一] 因子有效性开关判定 (贪心测试 21 项因子)...`);
+  
+  indicatorKeys.forEach((indKey, idx) => {
+    if (onStepProgress) {
+      onStepProgress(idx + 1, indicatorKeys.length * 2, `评估因子 ${indKey} 开关状态...`);
+    }
 
-    const trialResult = runWalkForwardBacktest(df, startPeriod, endPeriod, trialSettings);
-    const trialHitRate = trialResult.hitRate;
-    log(`尝试开启 ${ind} -> 命中率: ${trialHitRate.toFixed(2)}% | 历史最高: ${bestHitRate.toFixed(2)}%`);
+    const isCurrentlyOn = !!currentSettings.indicators[indKey];
+    const trialSettings: IndicatorSettings = JSON.parse(JSON.stringify(currentSettings));
+    
+    // 尝试切换状态
+    trialSettings.indicators[indKey] = !isCurrentlyOn;
 
-    // Keep if better, or equal and above random selection
-    if (trialHitRate > bestHitRate || (trialHitRate === bestHitRate && trialHitRate > 41.67)) {
-      currentSettings.indicators[ind] = true;
+    const trialRes = runWalkForwardBacktest(df, startPeriod, endPeriod, trialSettings);
+    const trialHitRate = trialRes.hitRate;
+
+    if (trialHitRate > bestHitRate) {
+      currentSettings.indicators[indKey] = !isCurrentlyOn;
+      const delta = trialHitRate - bestHitRate;
       bestHitRate = trialHitRate;
-      log(`  => [激活成功] 命中率提升至 ${bestHitRate.toFixed(2)}%`);
-    } else {
-      log(`  => [剔除] 未能增加效益，保持关闭。`);
+      log(`  ✔ [因子调整] ${indKey} 切换为 [${!isCurrentlyOn ? "开启" : "关闭"}] ➔ 命中率提升 +${delta.toFixed(2)}% (${bestHitRate.toFixed(2)}%)`);
     }
   });
 
-  // 3. Simple weight local search tuning
-  log("开始微调活跃因子的评分权重...");
-  const activeIndicators = Object.entries(currentSettings.indicators)
-    .filter(([_, v]) => v)
-    .map(([k]) => k);
+  // 第二阶段：因子权重坐标下降深探 (Coordinate Descent Weight Optimization)
+  log(`\n⚡ [阶段二] 因子权重系数深度寻优 (针对正加分与负惩罚因子进行自适应步长调优)...`);
 
-  const weightMap: Record<string, string> = {
-    "ENABLE_HISTORICAL_HEAT": "HISTORICAL_HEAT_WEIGHT",
-    "ENABLE_RECENT_HEAT_10": "RECENT_HEAT_10_WEIGHT",
-    "ENABLE_RECENT_HEAT_20": "RECENT_HEAT_20_WEIGHT",
-    "ENABLE_RECENT_HEAT_50": "RECENT_HEAT_50_WEIGHT",
-    "ENABLE_MISSING_VALUE": "MISSING_VALUE_WEIGHT",
-    "ENABLE_AVERAGE_INTERVAL": "AVERAGE_INTERVAL_WEIGHT",
-    "ENABLE_COLD_HOT_BALANCE": "COLD_HOT_BALANCE_WEIGHT",
-    "ENABLE_MARKOV": "MARKOV_WEIGHT",
-    "ENABLE_WAVE_REVERSION": "WAVE_REVERSION_WEIGHT",
-    "ENABLE_ODD_EVEN_REVERSION": "ODD_EVEN_REVERSION_WEIGHT",
-    "ENABLE_SIZE_REVERSION": "SIZE_REVERSION_WEIGHT",
-    "ENABLE_TAIL_REVERSION": "TAIL_REVERSION_WEIGHT",
-    "ENABLE_CONSECUTIVE_PENALTY": "CONSECUTIVE_PENALTY_WEIGHT",
-    "ENABLE_MAX_MISSING_RECOVERY": "MAX_MISSING_RECOVERY_WEIGHT",
-    "ENABLE_CYCLE_ANALYSIS": "CYCLE_ANALYSIS_WEIGHT",
-    "ENABLE_SIMILAR_WINDOW": "SIMILAR_WINDOW_WEIGHT",
-    "ENABLE_WUXING_HARMONY": "WUXING_HARMONY_WEIGHT",
-    "ENABLE_ZODIAC_HARMONY": "ZODIAC_HARMONY_WEIGHT",
-    "ENABLE_HESHU_REVERSION": "HESHU_REVERSION_WEIGHT",
-    "ENABLE_DECAY_MARKOV": "DECAY_MARKOV_WEIGHT",
-    "ENABLE_ATTRIBUTE_TRANSITION": "ATTRIBUTE_TRANSITION_WEIGHT"
-  };
+  const activeIndicators = indicatorKeys.filter(k => currentSettings.indicators[k]);
 
-  activeIndicators.forEach(ind => {
-    const wKey = weightMap[ind];
+  activeIndicators.forEach((indKey, idx) => {
+    const wKey = INDICATOR_TO_WEIGHT_MAP[indKey];
     if (!wKey) return;
 
-    const originalW = currentSettings.weights[wKey];
-    const multipliers = [1.5, 2.0, 3.0, 0.5];
+    if (onStepProgress) {
+      onStepProgress(
+        indicatorKeys.length + idx + 1,
+        indicatorKeys.length * 2,
+        `优化权重 ${wKey}...`
+      );
+    }
 
-    multipliers.forEach(m => {
-      const trialSettings: IndicatorSettings = {
-        indicators: { ...currentSettings.indicators },
-        weights: { ...currentSettings.weights }
-      };
-      trialSettings.weights[wKey] = originalW * m;
+    const currentW = currentSettings.weights[wKey] ?? 1.0;
+    
+    // 针对负惩罚因子（如连开惩罚）与正加分因子设计探针集合
+    let candidateWeights: number[] = [];
 
-      const trialResult = runWalkForwardBacktest(df, startPeriod, endPeriod, trialSettings);
-      const trialHitRate = trialResult.hitRate;
+    if (currentW < 0 || indKey.includes("PENALTY")) {
+      // 负惩罚因子候选步长（扩大惩罚或微调减小惩罚）
+      candidateWeights = [-0.5, -1.0, -1.5, -2.0, -2.5, -3.0, -4.0, -5.0, -6.0, -8.0, 0.0];
+    } else {
+      // 正向因子候选倍率及绝对步长
+      candidateWeights = [
+        currentW * 0.2,
+        currentW * 0.5,
+        currentW * 0.8,
+        currentW * 1.2,
+        currentW * 1.5,
+        currentW * 2.0,
+        currentW * 2.5,
+        currentW * 3.0,
+        currentW * 4.0,
+        currentW * 5.0,
+        currentW + 0.5,
+        currentW + 1.0,
+        currentW + 2.0,
+        Math.max(0.1, currentW - 0.5)
+      ];
+    }
 
-      if (trialHitRate > bestHitRate) {
-        bestHitRate = trialHitRate;
-        currentSettings.weights[wKey] = originalW * m;
-        log(`  => [权重微调] 调整 ${wKey} 至 ${trialSettings.weights[wKey].toFixed(2)} | 命中率提升至: ${bestHitRate.toFixed(2)}%`);
+    // 过滤并去重，控制在合理区间 [-10, 10]
+    candidateWeights = Array.from(
+      new Set(
+        candidateWeights
+          .map(w => Math.round(w * 10) / 10)
+          .filter(w => w >= -10 && w <= 10 && w !== currentW)
+      )
+    );
+
+    let bestWForThisKey = currentW;
+
+    candidateWeights.forEach(trialW => {
+      const trialSettings: IndicatorSettings = JSON.parse(JSON.stringify(currentSettings));
+      trialSettings.weights[wKey] = trialW;
+
+      const trialRes = runWalkForwardBacktest(df, startPeriod, endPeriod, trialSettings);
+      if (trialRes.hitRate > bestHitRate) {
+        const delta = trialRes.hitRate - bestHitRate;
+        bestHitRate = trialRes.hitRate;
+        bestWForThisKey = trialW;
+        log(`  ★ [权重升级] ${wKey}: ${currentW.toFixed(1)}x ➔ ${trialW.toFixed(1)}x | 命中率提升 +${delta.toFixed(2)}% (${bestHitRate.toFixed(2)}%)`);
       }
+    });
+
+    currentSettings.weights[wKey] = bestWForThisKey;
+  });
+
+  // 第三阶段：统计对比并生成变更明细
+  const weightChanges: WeightChangeItem[] = [];
+
+  indicatorKeys.forEach(indKey => {
+    const wKey = INDICATOR_TO_WEIGHT_MAP[indKey];
+    if (!wKey) return;
+
+    const oldW = initialSettings.weights[wKey] ?? 1.0;
+    const newW = currentSettings.weights[wKey] ?? 1.0;
+    const oldEnabled = !!initialSettings.indicators[indKey];
+    const newEnabled = !!currentSettings.indicators[indKey];
+
+    // 计算单个因子的贡献
+    const singleTrialSettings = JSON.parse(JSON.stringify(currentSettings));
+    singleTrialSettings.weights[wKey] = oldW;
+    singleTrialSettings.indicators[indKey] = oldEnabled;
+
+    const singleRes = runWalkForwardBacktest(df, startPeriod, endPeriod, singleTrialSettings);
+    const impact = Math.round((bestHitRate - singleRes.hitRate) * 100) / 100;
+
+    weightChanges.push({
+      key: indKey,
+      weightKey: wKey,
+      name: indKey,
+      oldWeight: oldW,
+      newWeight: newW,
+      oldEnabled,
+      newEnabled,
+      impact
     });
   });
 
-  log(`模型寻优优化完成！最终最优滚动回测命中率: ${bestHitRate.toFixed(2)}%`);
+  const improvement = Math.round((bestHitRate - initialHitRate) * 100) / 100;
+
+  log(`\n🎉 AI 因子权重寻优圆满完成！`);
+  log(`🎯 最佳命中率: ${bestHitRate.toFixed(2)}% (对比原始提升 +${improvement.toFixed(2)}%)`);
+
   return {
     settings: currentSettings,
-    bestHitRate
+    initialHitRate: Math.round(initialHitRate * 100) / 100,
+    bestHitRate: Math.round(bestHitRate * 100) / 100,
+    improvement,
+    weightChanges,
+    logs
   };
 }

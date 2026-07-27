@@ -6,7 +6,7 @@
 import { useState, useEffect } from "react";
 import { Play, RotateCcw, LineChart, Cpu, CheckCircle2, XCircle, TrendingUp, HelpCircle, ArrowRight, BarChart3, Sparkles, AlertTriangle, Check, Zap, Info } from "lucide-react";
 import { LineChart as ReLineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } from "recharts";
-import { HistoryRecord, runWalkForwardBacktest, optimizeSettings, DEFAULT_SETTINGS } from "../utils/lotteryEngine";
+import { HistoryRecord, runWalkForwardBacktest, optimizeSettings, DEFAULT_SETTINGS, OptimizationResult, INDICATOR_TO_WEIGHT_MAP } from "../utils/lotteryEngine";
 
 // 十六大因子的中文翻译、详细说明及分类标签
 export const FACTOR_METADATA: Record<string, { name: string; desc: string; category: string }> = {
@@ -53,6 +53,8 @@ export default function BacktestTab({ history, activeSettings, setActiveSettings
   const [optimizing, setOptimizing] = useState<boolean>(false);
   const [optLogs, setOptLogs] = useState<string[]>([]);
   const [optProgress, setOptProgress] = useState<number>(0);
+  const [optimizationResult, setOptimizationResult] = useState<OptimizationResult | null>(null);
+  const [optTrainWindow, setOptTrainWindow] = useState<number>(50); // 默认选择近50期训练集
 
   // 折线图数据
   const [chartData, setChartData] = useState<any[]>([]);
@@ -304,97 +306,94 @@ export default function BacktestTab({ history, activeSettings, setActiveSettings
       });
   };
 
-  // 运行自动模型寻优
+  // 运行 AI 因子权重真实坐标下降寻优
   const handleOptimize = () => {
     if (running || optimizing) return;
-    if (testPeriods.length === 0) return;
+    if (history.length < 30) {
+      showToast("❌ 历史数据少于 30 期，数据不足以进行自动寻优。");
+      return;
+    }
+
     setOptimizing(true);
+    setOptimizationResult(null);
     setOptLogs([]);
     setOptProgress(0);
 
-    const recommendCount = activeSettings?.recommendCount ?? 5;
-    const randomRate = (recommendCount / 12) * 100;
+    const logList: string[] = [];
+    const pushLog = (msg: string) => {
+      logList.push(msg);
+      setOptLogs([...logList]);
+      setTimeout(() => {
+        const consoleEl = document.getElementById("opt-console");
+        if (consoleEl) consoleEl.scrollTop = consoleEl.scrollHeight;
+      }, 10);
+    };
 
-    const logs: string[] = [];
-    logs.push("🤖 [优化引擎] 启动多因子自适应贪心调优算法...");
-    logs.push(`🤖 [优化引擎] 调优周期：${testStartPeriod}期 至 ${testEndPeriod}期`);
-    logs.push("🤖 [优化引擎] 正在计算全部指标关闭状态的初始盲选基准...");
-    setOptLogs([...logs]);
+    pushLog("🤖 [AI 因子寻优引擎] 启动真实多维坐标下降与自适应权重梯度深探算法...");
+
+    // 确定训练集的起止期数
+    const allPeriods = Array.from(new Set(history.map(r => r.period))).sort((a, b) => a - b);
+    const endPeriod = allPeriods[allPeriods.length - 1];
+    const maxAvailableTrain = Math.max(1, allPeriods.length - 30);
+    const trainCount = (optTrainWindow === 0 || optTrainWindow > maxAvailableTrain)
+      ? maxAvailableTrain
+      : optTrainWindow;
+    const startPeriod = allPeriods[allPeriods.length - trainCount - 1] || allPeriods[30] || allPeriods[0];
+
+    pushLog(`🤖 [训练数据范围] 已锁定${optTrainWindow === 0 ? "全部历史(" + trainCount + "期)" : "近 " + trainCount + " 期"}作为泛化评估集 (第 ${startPeriod} 期 ～ 第 ${endPeriod} 期)`);
+    pushLog("🤖 [探针配置] 正在计算当前基准策略之历史胜率，随后开始逐一探针 21 项因子的权重梯度...");
 
     setTimeout(() => {
-      logs.push(`🤖 [基准测试] 初始盲选状态命中率: ${randomRate.toFixed(2)}% (12选${recommendCount}随机概率)`);
-      setOptLogs([...logs]);
-      setOptProgress(10);
-    }, 800);
+      try {
+        const result = optimizeSettings(
+          history,
+          startPeriod,
+          endPeriod,
+          activeSettings,
+          (step, total, msg) => {
+            const pct = Math.min(95, Math.round((step / total) * 90) + 5);
+            setOptProgress(pct);
+            pushLog(`🔍 [梯度寻找] (${step}/${total}) ${msg}`);
+          }
+        );
 
-    const indicatorsToTest = Object.keys(DEFAULT_SETTINGS.indicators);
-    let currentBestRate = randomRate;
-    let indIndex = 0;
-    
-    // 逐个指标开启进行贪心评价
-    const interval = setInterval(() => {
-      if (indIndex >= indicatorsToTest.length) {
-        clearInterval(interval);
-        
-        const finalRate = currentBestRate + 2;
-        const improvementPercent = ((finalRate - randomRate) / randomRate) * 100;
-
-        // 扫尾：权重微调
-        logs.push("\n🤖 [阶段二] 活跃因子权重精细化微调...");
-        logs.push(` -> 权重微调: 调整 RECENT_HEAT_20_WEIGHT 至 3.00 | 命中率提升至: ${Math.min(finalRate, 85).toFixed(2)}%`);
-        logs.push("\n🤖 [调优结果] 模型寻优圆满完成！");
-        logs.push(`🤖 [最佳绩效] 最佳滚动回测命中率：${finalRate.toFixed(2)}% (对比随机提升了约 ${improvementPercent.toFixed(1)}%)`);
-        logs.push("🤖 [持久化] 寻优参数已写回至 optimized_config.json 及本地配置。");
-        setOptLogs([...logs]);
         setOptProgress(100);
+        setOptimizationResult(result);
+        setOptLogs(result.logs);
         setOptimizing(false);
 
-        // 实际调用TS引擎优化，并同步保存配置到服务器
-        const opt = optimizeSettings(history, testStartPeriod, testEndPeriod);
-        // 保留用户的 recommendCount
-        const optimizedSettings = {
-          ...opt.settings,
-          recommendCount
-        };
-        setActiveSettings(optimizedSettings);
-
-        // API同步保存
-        fetch("/api/config", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(optimizedSettings)
-        });
-
-        return;
+        showToast(`🎉 因子权重寻优完成！最佳滚动回测命中率由 ${result.initialHitRate}% 提升至 ${result.bestHitRate}% (+${result.improvement}%)！`);
+      } catch (err: any) {
+        console.error("Optimize error:", err);
+        pushLog("❌ 寻优过程中发生异常: " + err.message);
+        setOptimizing(false);
       }
+    }, 400);
+  };
 
-      const ind = indicatorsToTest[indIndex];
-      // 模拟每次指标回测
-      const rateDelta = Math.random() > 0.45 ? Math.round(Math.random() * 6 * 100) / 100 : -Math.round(Math.random() * 4 * 100) / 100;
-      const trialRate = Math.min(75.0, Math.max(35.0, Math.round((currentBestRate + rateDelta) * 100) / 100));
+  // 应用并保存最优黄金权重到服务器与 Firestore 云端
+  const handleApplyOptimizedWeights = () => {
+    if (!optimizationResult) return;
 
-      logs.push(`🔍 评测因子 ${indIndex + 1}/${indicatorsToTest.length}: ${ind}`);
-      setOptLogs([...logs]);
+    const newSettings = optimizationResult.settings;
+    setActiveSettings(newSettings);
 
-      setTimeout(() => {
-        if (trialRate > currentBestRate) {
-          currentBestRate = trialRate;
-          logs.push(`  => [✔ 保留] 测得累积命中率: ${trialRate.toFixed(2)}% | 绩效优于历史峰值，开启指标。`);
+    fetch("/api/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(newSettings)
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d.success) {
+          showToast("🚀 黄金因子权重方案已全局部署！手机端与电脑端均已自动更新并同步最新的因子参数。");
         } else {
-          logs.push(`  => [× 关闭] 测得累积命中率: ${trialRate.toFixed(2)}% | 命中率未获提升，关闭指标。`);
+          showToast("❌ 策略配置保存到服务器失败。");
         }
-        setOptLogs([...logs]);
-        
-        // 滚动控制台
-        setTimeout(() => {
-          const consoleEl = document.getElementById("opt-console");
-          if (consoleEl) consoleEl.scrollTop = consoleEl.scrollHeight;
-        }, 10);
-      }, 150);
-
-      indIndex++;
-      setOptProgress(Math.round((indIndex / indicatorsToTest.length) * 80) + 10);
-    }, 450);
+      })
+      .catch(err => {
+        showToast("❌ 同步保存配置网络异常: " + err.message);
+      });
   };
 
   const recommendCount = activeSettings?.recommendCount ?? 5;
@@ -605,51 +604,219 @@ export default function BacktestTab({ history, activeSettings, setActiveSettings
             </div>
           </div>
 
-          {/* 自适应策略优化面板 */}
-          <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-xs space-y-4 relative overflow-hidden">
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-              <div className="flex items-center gap-2">
-                <Cpu className="text-purple-600 w-5 h-5" />
+          {/* ⚡ AI 智能因子权重自动寻优控制台 */}
+          <div className="bg-white p-6 rounded-2xl border border-purple-100/80 shadow-xs space-y-5 relative overflow-hidden bg-gradient-to-br from-purple-50/30 via-white to-transparent">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-purple-50 pb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-purple-100/80 text-purple-700 rounded-xl">
+                  <Cpu className="w-5 h-5" />
+                </div>
                 <div>
-                  <h3 className="text-sm font-bold text-gray-800">
-                    Auto-Optimize Parameter (自学习策略调优)
+                  <h3 className="text-sm font-bold text-gray-900 flex items-center gap-2">
+                    <span>AI 因子权重智能优化器 (Auto-Weight Optimization)</span>
+                    <span className="text-[10px] font-extrabold text-purple-600 bg-purple-100/60 px-2 py-0.5 rounded-full uppercase tracking-wider">
+                      坐标下降法
+                    </span>
                   </h3>
-                  <p className="text-xs text-gray-400 mt-0.5">
-                    采用启发式贪心对 16 项统计因子的开关与权重实施多轮剪枝，确保不发生过拟合。
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    基于历史真实回测数据，使用多维坐标下降与自适应步长算法，自动微调 21 项正加分及负惩罚因子（如连开惩罚等）的最佳权重系数。
                   </p>
                 </div>
               </div>
               
-              <button
-                onClick={handleOptimize}
-                disabled={running || optimizing}
-                className="flex items-center gap-1.5 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white font-bold text-xs py-2.5 px-4 rounded-xl shadow-xs transition-colors shrink-0 cursor-pointer"
-              >
-                <Cpu className="w-4 h-4" />
-                启动策略寻优
-              </button>
+              <div className="flex items-center gap-3 self-stretch sm:self-auto justify-between sm:justify-end">
+                {/* 训练窗口选择 */}
+                <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-xl border border-gray-200/60 text-xs flex-wrap sm:flex-nowrap">
+                  <span className="text-gray-400 pl-1.5 text-[11px] font-medium hidden md:inline">训练集:</span>
+                  {[30, 50, 80, 100, 0].map(w => (
+                    <button
+                      key={w}
+                      type="button"
+                      onClick={() => setOptTrainWindow(w)}
+                      disabled={optimizing}
+                      className={`px-2.5 py-1 font-bold rounded-lg transition-all cursor-pointer ${
+                        optTrainWindow === w
+                          ? "bg-white text-purple-700 shadow-xs font-black"
+                          : "text-gray-500 hover:text-gray-900"
+                      }`}
+                    >
+                      {w === 0 ? "全部" : `近${w}期`}
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  onClick={handleOptimize}
+                  disabled={running || optimizing}
+                  className="flex items-center justify-center gap-1.5 bg-purple-600 hover:bg-purple-700 active:scale-98 disabled:opacity-50 text-white font-bold text-xs py-2.5 px-4 rounded-xl shadow-xs transition-all shrink-0 cursor-pointer"
+                >
+                  <Sparkles className={`w-4 h-4 ${optimizing ? "animate-spin" : ""}`} />
+                  <span>{optimizing ? "算法正在寻优..." : "⚡ 启动因子权重寻优"}</span>
+                </button>
+              </div>
             </div>
 
-            {/* 调优日志控制台 */}
+            {/* 调优进程与日志终端 */}
             {(optimizing || optLogs.length > 0) && (
               <div className="space-y-3 animate-fadeIn">
-                <div className="flex items-center justify-between text-xs text-purple-700 font-bold">
-                  <span>模型调优进程中...</span>
-                  <span>{optProgress}%</span>
+                <div className="flex items-center justify-between text-xs text-purple-800 font-bold">
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-purple-600 animate-ping" />
+                    <span>AI 坐标下降与探针进度</span>
+                  </span>
+                  <span className="font-mono">{optProgress}%</span>
                 </div>
-                <div className="h-1 bg-slate-100 rounded-full overflow-hidden">
-                  <div className="h-full bg-purple-600 transition-all duration-300" style={{ width: `${optProgress}%` }} />
+
+                <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="h-full bg-gradient-to-r from-purple-500 to-emerald-500 transition-all duration-300" style={{ width: `${optProgress}%` }} />
                 </div>
                 
                 <div
                   id="opt-console"
-                  className="bg-slate-900 p-4 rounded-xl font-mono text-xs text-slate-300 h-36 overflow-y-auto space-y-1 scrollbar-thin select-text"
+                  className="bg-slate-950 p-4 rounded-xl font-mono text-xs text-slate-300 h-40 overflow-y-auto space-y-1.5 scrollbar-thin select-text border border-slate-800 shadow-inner"
                 >
-                  {optLogs.map((log, idx) => (
-                    <div key={idx} className={log.startsWith(" ->") ? "text-emerald-400 pl-4" : log.includes("🤖") ? "text-purple-300" : "text-gray-300"}>
-                      {log}
+                  {optLogs.map((log, idx) => {
+                    const isSuccess = log.includes("★") || log.includes("✔") || log.includes("🎉");
+                    const isHeader = log.includes("🤖") || log.includes("🚀");
+                    const isSub = log.startsWith("  ");
+                    return (
+                      <div
+                        key={idx}
+                        className={
+                          isSuccess
+                            ? "text-emerald-400 font-bold pl-2"
+                            : isHeader
+                            ? "text-purple-300 font-bold"
+                            : isSub
+                            ? "text-slate-400 pl-4"
+                            : "text-slate-300"
+                        }
+                      >
+                        {log}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* 寻优成果与权重变动明细战报 */}
+            {optimizationResult && (
+              <div className="space-y-4 pt-2 animate-fadeIn border-t border-purple-100">
+                {/* 成果核心对比卡片 */}
+                <div className="bg-gradient-to-r from-slate-900 via-purple-950 to-slate-900 text-white p-5 rounded-2xl shadow-md flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 text-amber-400 text-xs font-extrabold uppercase tracking-wider">
+                      <Zap className="w-4 h-4 fill-amber-400" />
+                      <span>因子权重优化结果战报 (Optimization Summary)</span>
                     </div>
-                  ))}
+                    <div className="text-xs text-slate-300">
+                      通过在{optTrainWindow === 0 ? "全部历史" : `近 ${optTrainWindow} 期`}窗口下的坐标下降迭代，系统已成功计算出最佳因子权重系数组合。
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-6 shrink-0 bg-white/10 backdrop-blur-md p-3.5 rounded-xl border border-white/10 self-stretch md:self-auto justify-around">
+                    <div className="text-center space-y-0.5">
+                      <div className="text-[10px] text-slate-400 uppercase font-bold">寻优前胜率</div>
+                      <div className="font-mono text-lg font-bold text-slate-300">{optimizationResult.initialHitRate.toFixed(1)}%</div>
+                    </div>
+
+                    <div className="text-slate-500 font-bold text-xl">➔</div>
+
+                    <div className="text-center space-y-0.5">
+                      <div className="text-[10px] text-emerald-400 uppercase font-extrabold">黄金最佳胜率</div>
+                      <div className="font-mono text-2xl font-black text-emerald-400">{optimizationResult.bestHitRate.toFixed(1)}%</div>
+                    </div>
+
+                    <div className="text-center space-y-0.5 pl-2 border-l border-white/15">
+                      <div className="text-[10px] text-amber-300 uppercase font-bold">胜率极速提升</div>
+                      <div className="font-mono text-lg font-black text-amber-400">+{optimizationResult.improvement.toFixed(1)}%</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 因子权重变动明细表格 */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs font-bold text-gray-700 px-1">
+                    <span className="flex items-center gap-1.5">
+                      <BarChart3 className="w-4 h-4 text-purple-600" />
+                      <span>因子权重及开关状态对比明细 (Factor Weight Shift Breakdown)</span>
+                    </span>
+                    <button
+                      onClick={handleApplyOptimizedWeights}
+                      className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs py-2 px-3.5 rounded-xl shadow-xs transition-all cursor-pointer"
+                    >
+                      <Check className="w-4 h-4" />
+                      <span>应用并保存黄金权重到云端</span>
+                    </button>
+                  </div>
+
+                  <div className="bg-slate-50 rounded-xl border border-slate-200/70 overflow-hidden max-h-72 overflow-y-auto scrollbar-thin">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-100/80 text-slate-600 font-bold border-b border-slate-200 text-[11px]">
+                        <tr>
+                          <th className="py-2.5 px-3">因子名称</th>
+                          <th className="py-2.5 px-3">状态</th>
+                          <th className="py-2.5 px-3">寻优前权重</th>
+                          <th className="py-2.5 px-3">寻优后黄金权重</th>
+                          <th className="py-2.5 px-3 text-right">权重变动</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200/60 font-mono text-[11px]">
+                        {optimizationResult.weightChanges.map(wc => {
+                          const meta = FACTOR_METADATA[wc.key];
+                          const name = meta?.name.split(" ")[0] || wc.key;
+                          const category = meta?.category || "通用";
+                          const isWeightChanged = wc.oldWeight !== wc.newWeight;
+                          const isStatusChanged = wc.oldEnabled !== wc.newEnabled;
+                          const isPenalty = wc.oldWeight < 0 || wc.key.includes("PENALTY");
+
+                          return (
+                            <tr key={wc.key} className={`hover:bg-slate-100/60 transition-colors ${isWeightChanged || isStatusChanged ? "bg-purple-50/20" : ""}`}>
+                              <td className="py-2 px-3 font-sans font-bold text-slate-800">
+                                <div className="flex items-center gap-1.5">
+                                  <span>{name}</span>
+                                  <span className="text-[9px] font-normal text-slate-400 bg-slate-200/60 px-1.5 py-0.2 rounded">
+                                    {category}
+                                  </span>
+                                </div>
+                              </td>
+
+                              <td className="py-2 px-3 font-sans">
+                                {wc.newEnabled ? (
+                                  <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100/70 px-1.5 py-0.5 rounded">
+                                    已启用
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] font-bold text-slate-400 bg-slate-200/60 px-1.5 py-0.5 rounded">
+                                    静默/关
+                                  </span>
+                                )}
+                              </td>
+
+                              <td className="py-2 px-3 text-slate-500 font-semibold">
+                                {wc.oldWeight.toFixed(1)}x
+                              </td>
+
+                              <td className="py-2 px-3 font-extrabold text-purple-700">
+                                {wc.newWeight.toFixed(1)}x
+                              </td>
+
+                              <td className="py-2 px-3 text-right font-bold">
+                                {isWeightChanged ? (
+                                  <span className={wc.newWeight > wc.oldWeight ? (isPenalty ? "text-amber-600" : "text-emerald-600") : "text-blue-600"}>
+                                    {wc.oldWeight.toFixed(1)}x ➔ {wc.newWeight.toFixed(1)}x
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-300">无变动</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               </div>
             )}
