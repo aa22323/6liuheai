@@ -4,11 +4,11 @@
  */
 
 import { useState, useEffect } from "react";
-import { Sparkles, Calendar, Award, ChevronDown, ChevronUp, BarChart3, ShieldAlert, BadgeCheck, Download, RefreshCw, BrainCircuit, Play, FileCheck } from "lucide-react";
+import { Sparkles, Calendar, Award, ChevronDown, ChevronUp, BarChart3, ShieldAlert, BadgeCheck, Download, RefreshCw, BrainCircuit, Play, FileCheck, Target, TrendingUp, CheckCircle2, XCircle, Info } from "lucide-react";
 import Markdown from "react-markdown";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from "recharts";
 
-import { HistoryRecord, computeZodiacScores, DEFAULT_SETTINGS, runWalkForwardBacktest, precomputeStats } from "../utils/lotteryEngine";
+import { HistoryRecord, computeZodiacScores, DEFAULT_SETTINGS, runWalkForwardBacktest, precomputeStats, getRealtimeBacktestStats } from "../utils/lotteryEngine";
 import { ZODIAC_MAPPING } from "../utils/zodiacConfig";
 import { saveStrategyConfig, getSavedAiReport, saveAiReport } from "../firebase";
 import { generatePredictionAnalysis } from "../gemini";
@@ -17,9 +17,10 @@ interface PredictionTabProps {
   history: HistoryRecord[];
   activeSettings: any;
   setActiveSettings: (settings: any) => void;
+  realtimeStats?: any;
 }
 
-export default function PredictionTab({ history, activeSettings, setActiveSettings }: PredictionTabProps) {
+export default function PredictionTab({ history, activeSettings, setActiveSettings, realtimeStats: passedRealtimeStats }: PredictionTabProps) {
   const [nextPeriod, setNextPeriod] = useState<number>(192);
   const [predictions, setPredictions] = useState<any[]>([]);
   const [allScores, setAllScores] = useState<Record<string, number>>({});
@@ -284,6 +285,8 @@ export default function PredictionTab({ history, activeSettings, setActiveSettin
     triggerDownload(csv, `lottery_ai_backtest_simulation_${nextPeriod}.csv`, "text/csv;charset=utf-8;");
   };
 
+  const realtimeStats = passedRealtimeStats || getRealtimeBacktestStats(history, activeSettings);
+
   return (
     <div className="space-y-6">
       {/* 核心看板：下一期推荐期数 */}
@@ -310,6 +313,58 @@ export default function PredictionTab({ history, activeSettings, setActiveSettin
             <div className="font-mono text-sm font-bold text-slate-200">
               {history[history.length - 1].period}期 (特码:{history[history.length - 1].number} / {history[history.length - 1].zodiac})
             </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 📊 真实全量滚动回测实时大盘 (四项核心数据卡片，严格对应图示) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* 卡片 1：滚动测试期数 */}
+        <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-xs space-y-3">
+          <div className="text-xs font-bold text-gray-400">滚动测试期数</div>
+          <div className="flex items-baseline gap-2">
+            <span className="font-mono text-2xl font-black text-slate-900">{realtimeStats.totalPeriods}</span>
+            <span className="text-xs font-semibold text-gray-400">/ {realtimeStats.totalPeriods}期</span>
+          </div>
+          <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+            <div className="h-full bg-slate-800 rounded-full" style={{ width: "100%" }} />
+          </div>
+        </div>
+
+        {/* 卡片 2：模型命中次数 */}
+        <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-xs space-y-2">
+          <div className="text-xs font-bold text-gray-400">模型命中次数</div>
+          <div className="flex items-baseline gap-2">
+            <span className="font-mono text-2xl font-black text-emerald-600">{realtimeStats.hits}</span>
+            <span className="text-xs font-bold text-gray-400">次</span>
+          </div>
+          <div className="text-xs font-bold text-emerald-600/90 flex items-center gap-1">
+            <span>推荐{recommendCount}个生肖击中特码</span>
+          </div>
+        </div>
+
+        {/* 卡片 3：累积回测命中率 */}
+        <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-xs space-y-2">
+          <div className="text-xs font-bold text-gray-400">累积回测命中率</div>
+          <div className="font-mono text-2xl font-black text-slate-900">
+            {realtimeStats.hitRate.toFixed(1)}%
+          </div>
+          <div className="text-xs font-bold text-gray-400">
+            随机基准 {realtimeStats.randomHitRate.toFixed(1)}%
+          </div>
+        </div>
+
+        {/* 卡片 4：模型表现提升幅度 */}
+        <div className="bg-emerald-50/50 p-5 rounded-2xl border border-emerald-100/80 shadow-xs space-y-2">
+          <div className="text-xs font-bold text-emerald-800 flex items-center gap-1">
+            <TrendingUp className="w-3.5 h-3.5 text-emerald-600" />
+            <span>模型表现提升幅度</span>
+          </div>
+          <div className="font-mono text-2xl font-black text-emerald-600">
+            +{(realtimeStats.hitRate - realtimeStats.randomHitRate).toFixed(1)}%
+          </div>
+          <div className="text-xs font-bold text-emerald-700/80">
+            对比随机预测大数差距
           </div>
         </div>
       </div>

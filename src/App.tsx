@@ -4,8 +4,8 @@
  */
 
 import { useState, useEffect } from "react";
-import { Sparkles, BarChart3, Settings, Database, FileCode, Landmark, RefreshCw, Layers } from "lucide-react";
-import { HistoryRecord, DEFAULT_SETTINGS } from "./utils/lotteryEngine";
+import { Sparkles, BarChart3, Settings, Database, FileCode, Landmark, RefreshCw, Layers, Target, CheckCircle2, XCircle } from "lucide-react";
+import { HistoryRecord, DEFAULT_SETTINGS, getRealtimeBacktestStats } from "./utils/lotteryEngine";
 import { getHistoryRecords, getStrategyConfig } from "./firebase";
 import { updateZodiacMapping } from "./utils/zodiacConfig";
 
@@ -81,6 +81,9 @@ export default function App() {
     }
   }
 
+  // 全量历史真实滚动回测统计数据（随 history 或 activeSettings 动态联动）
+  const realtimeStats = getRealtimeBacktestStats(history, activeSettings);
+
   return (
     <div className="min-h-screen bg-slate-50/70 text-slate-800 font-sans flex flex-col antialiased">
       {/* 顶部主横幅 / 导航 */}
@@ -105,9 +108,49 @@ export default function App() {
               </div>
             </div>
 
-            {/* 右侧：状态面板 */}
-            <div className="flex items-center gap-4 text-xs font-semibold">
-              <div className="hidden sm:flex items-center gap-4">
+            {/* 右侧：状态面板与实时胜率 */}
+            <div className="flex items-center gap-3 text-xs font-semibold">
+              {/* 🎯 全局真实回测胜率实时小卡片 */}
+              {history.length >= 30 && (
+                <div 
+                  className="hidden lg:flex items-center gap-2 bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-50/50 border border-emerald-200/80 px-3 py-1.5 rounded-xl text-emerald-900 shadow-2xs hover:shadow-xs transition-all cursor-default"
+                  title="根据严格 Walk-Forward 滚动无未来数据回测算出的真实胜率"
+                >
+                  <div className="flex items-center gap-1.5 font-bold">
+                    <Target className="w-4 h-4 text-emerald-600 animate-pulse shrink-0" />
+                    <span className="text-gray-500 font-medium text-[11px]">真实回测胜率:</span>
+                    <span className="font-mono font-black text-emerald-700 text-sm">
+                      {realtimeStats.hitRate.toFixed(1)}%
+                    </span>
+                    <span className="text-[11px] text-emerald-700/80 font-semibold font-mono">
+                      ({realtimeStats.hits}/{realtimeStats.totalPeriods}期)
+                    </span>
+                  </div>
+
+                  {realtimeStats.latestDetail && (
+                    <div className={`text-[10px] font-bold px-2 py-0.5 rounded-lg flex items-center gap-1 border shrink-0 ${
+                      realtimeStats.latestDetail.isHit 
+                        ? "bg-emerald-100/90 text-emerald-800 border-emerald-300" 
+                        : "bg-rose-100/90 text-rose-800 border-rose-200"
+                    }`}>
+                      <span>第{realtimeStats.latestDetail.period}期</span>
+                      {realtimeStats.latestDetail.isHit ? (
+                        <span className="flex items-center gap-0.5 text-emerald-700">
+                          <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                          <span>命中</span>
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-0.5 text-rose-700">
+                          <XCircle className="w-3 h-3 text-rose-600" />
+                          <span>未中</span>
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="hidden sm:flex items-center gap-3">
                 <div className="flex items-center gap-1.5 text-slate-600 bg-slate-100 px-3 py-1.5 rounded-lg">
                   <Landmark className="w-3.5 h-3.5" />
                   <span className="font-bold">
@@ -240,6 +283,7 @@ export default function App() {
                   history={history} 
                   activeSettings={activeSettings} 
                   setActiveSettings={setActiveSettings} 
+                  realtimeStats={realtimeStats}
                 />
               )}
               {activeTab === "backtest" && (
@@ -256,7 +300,14 @@ export default function App() {
                   setActiveSettings={setActiveSettings} 
                 />
               )}
-              {activeTab === "data" && <DataTab history={history} onRefresh={fetchHistory} />}
+              {activeTab === "data" && (
+                <DataTab 
+                  history={history} 
+                  activeSettings={activeSettings}
+                  realtimeStats={realtimeStats}
+                  onRefresh={fetchHistory} 
+                />
+              )}
               {activeTab === "python" && <PythonTab history={history} activeSettings={activeSettings} />}
             </div>
           )}

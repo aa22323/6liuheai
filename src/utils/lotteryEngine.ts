@@ -751,6 +751,44 @@ export function runWalkForwardBacktest(
 }
 
 /**
+ * 计算全量历史真实滚动回测统计数据（用于全局实时胜率看板与录入动态联动）
+ */
+export function getRealtimeBacktestStats(
+  df: HistoryRecord[],
+  settings?: IndicatorSettings
+) {
+  if (!df || df.length < 30) {
+    return {
+      hitRate: 0,
+      hits: 0,
+      totalPeriods: 0,
+      randomHitRate: 41.67,
+      improvement: 0,
+      latestDetail: null,
+      previousDetail: null,
+      details: []
+    };
+  }
+
+  const result = runWalkForwardBacktest(
+    df,
+    0,
+    999999,
+    settings || DEFAULT_SETTINGS
+  );
+
+  const details = result.details || [];
+  const latestDetail = details.length > 0 ? details[details.length - 1] : null;
+  const previousDetail = details.length > 1 ? details[details.length - 2] : null;
+
+  return {
+    ...result,
+    latestDetail,
+    previousDetail
+  };
+}
+
+/**
  * 贪心指标选择器与权重优化器
  */
 export interface WeightChangeItem {

@@ -4,12 +4,14 @@
  */
 
 import { useState, useEffect, FormEvent } from "react";
-import { Table, Search, ShieldCheck, Play, ArrowLeft, ArrowRight, Database, Plus, Trash2, HelpCircle, Edit } from "lucide-react";
-import { HistoryRecord } from "../utils/lotteryEngine";
+import { Table, Search, ShieldCheck, Play, ArrowLeft, ArrowRight, Database, Plus, Trash2, HelpCircle, Edit, Target, TrendingUp, CheckCircle2, XCircle, Sparkles } from "lucide-react";
+import { HistoryRecord, computeZodiacScores, DEFAULT_SETTINGS, getRealtimeBacktestStats } from "../utils/lotteryEngine";
 import { addHistoryRecord, deleteHistoryRecord, deleteSpecificHistoryRecord } from "../firebase";
 
 interface DataTabProps {
   history: HistoryRecord[];
+  activeSettings?: any;
+  realtimeStats?: any;
   onRefresh?: () => void;
 }
 
@@ -19,7 +21,7 @@ const ZODIAC_EMOJIS: Record<string, string> = {
   "马": "🐴", "羊": "🐑", "猴": "🐵", "鸡": "🐔", "狗": "🐶", "猪": "🐷"
 };
 
-export default function DataTab({ history, onRefresh }: DataTabProps) {
+export default function DataTab({ history, activeSettings, realtimeStats: passedRealtimeStats, onRefresh }: DataTabProps) {
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [validationLog, setValidationLog] = useState<string>("");
@@ -34,6 +36,7 @@ export default function DataTab({ history, onRefresh }: DataTabProps) {
   const [submitSuccess, setSubmitSuccess] = useState<string>("");
   const [deletingLast, setDeletingLast] = useState<boolean>(false);
 
+  const stats = passedRealtimeStats || getRealtimeBacktestStats(history, activeSettings);
   const maxPeriod = history.length > 0 ? Math.max(...history.map(h => h.period)) : 0;
 
   useEffect(() => {
@@ -66,8 +69,40 @@ export default function DataTab({ history, onRefresh }: DataTabProps) {
 
     setSubmitting(true);
     try {
+      // 在录入前计算量化模型对新一期的推算推荐
+      const dfBefore = history.filter(h => h.period < periodNum);
+      const prevScores = computeZodiacScores(dfBefore, activeSettings || DEFAULT_SETTINGS);
+      const sortedZ = Object.entries(prevScores).sort((a, b) => b[1] - a[1]).map(e => e[0]);
+      const recommendCount = activeSettings?.recommendCount ?? 5;
+      const topRecs = sortedZ.slice(0, recommendCount);
+      const isHit = topRecs.includes(newZodiac);
+
+      // 计算胜率动态变化趋势
+      const oldHitRate = stats.hitRate;
+      const oldHits = stats.hits;
+      const oldTotal = stats.totalPeriods;
+      const newTotal = oldTotal + 1;
+      const newHits = isHit ? oldHits + 1 : oldHits;
+      const newHitRate = Math.round((newHits / newTotal) * 10000) / 100;
+      const rateDelta = (newHitRate - oldHitRate).toFixed(2);
+      const signStr = Number(rateDelta) >= 0 ? `+${rateDelta}%` : `${rateDelta}%`;
+
       await addHistoryRecord(periodNum, drawNum, newZodiac, isOverwriting);
-      setSubmitSuccess(`第 ${periodNum} 期（号码: ${drawNum}，生肖: ${newZodiac}）开奖数据已成功${isOverwriting ? '修改并覆盖' : '存入'} Firestore 数据库！`);
+
+      if (isHit) {
+        setSubmitSuccess(
+          `🎉 第 ${periodNum} 期（号码: ${drawNum}，生肖: ${newZodiac}）成功写入数据库！\n` +
+          `🎯 量化引擎在此期开奖前推算推荐：【${topRecs.join(", ")}】 ➔ 🎯 完美命中特码！\n` +
+          `📈 全量真实回测胜率由 ${oldHitRate}% 实时向上提升至 ${newHitRate}% (${signStr}，累计命中 ${newHits}/${newTotal} 期)！`
+        );
+      } else {
+        setSubmitSuccess(
+          `🎉 第 ${periodNum} 期（号码: ${drawNum}，生肖: ${newZodiac}）成功写入数据库！\n` +
+          `⚠️ 量化引擎在此期开奖前推算推荐：【${topRecs.join(", ")}】 ➔ ❌ 未能命中。\n` +
+          `📉 全量真实回测胜率实时调整为 ${newHitRate}% (${signStr}，累计命中 ${oldHits}/${newTotal} 期)。`
+        );
+      }
+
       setNewNumber("");
       setNewZodiac("");
       setNewPeriod((periodNum + 1).toString());
@@ -256,6 +291,85 @@ export default function DataTab({ history, onRefresh }: DataTabProps) {
           )}
         </div>
       )}
+
+      {/* 📊 真实回测胜率实时联动看板 */}
+      <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white rounded-2xl p-6 shadow-md border border-slate-700/60 space-y-4">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-700/80 pb-4">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <Target className="w-5 h-5 text-emerald-400 animate-pulse" />
+              <h3 className="text-base font-extrabold tracking-tight text-white">
+                全量历史真实滚动回测胜率看板 (Real-Time Walk-Forward Tracker)
+              </h3>
+            </div>
+            <p className="text-xs text-slate-400">
+              严格按照开奖时间顺序进行无未来盲测推算。当您录入最新开奖结果后，胜率将根据模型之前推算是否命中实时增加或下降。
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3 bg-emerald-500/10 border border-emerald-500/30 px-4 py-2 rounded-xl shrink-0">
+            <div className="text-right">
+              <div className="text-[10px] text-emerald-400/90 font-bold uppercase tracking-wider">实时全量胜率</div>
+              <div className="text-xl font-mono font-black text-emerald-400">
+                {stats.hitRate.toFixed(1)}%
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="bg-slate-800/60 p-3.5 rounded-xl border border-slate-700/50 space-y-1">
+            <div className="text-[11px] text-slate-400 font-medium">评估总期数</div>
+            <div className="font-mono text-lg font-extrabold text-slate-100">{stats.totalPeriods} 期</div>
+          </div>
+
+          <div className="bg-slate-800/60 p-3.5 rounded-xl border border-slate-700/50 space-y-1">
+            <div className="text-[11px] text-slate-400 font-medium">准确命中次数</div>
+            <div className="font-mono text-lg font-extrabold text-emerald-400">{stats.hits} 次</div>
+          </div>
+
+          <div className="bg-slate-800/60 p-3.5 rounded-xl border border-slate-700/50 space-y-1">
+            <div className="text-[11px] text-slate-400 font-medium">随机基准概率</div>
+            <div className="font-mono text-lg font-extrabold text-slate-300">{stats.randomHitRate.toFixed(1)}%</div>
+          </div>
+
+          <div className="bg-slate-800/60 p-3.5 rounded-xl border border-slate-700/50 space-y-1">
+            <div className="text-[11px] text-slate-400 font-medium">对比基准提升</div>
+            <div className="font-mono text-lg font-extrabold text-emerald-400">
+              +{(stats.hitRate - stats.randomHitRate).toFixed(1)}%
+            </div>
+          </div>
+        </div>
+
+        {stats.latestDetail && (
+          <div className="bg-slate-800/90 p-3.5 rounded-xl border border-slate-700 text-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-bold text-slate-300">最新已录入期（第 {stats.latestDetail.period} 期）检验:</span>
+              <span className="font-mono bg-slate-700 px-2 py-0.5 rounded font-bold text-slate-200">
+                特码 {stats.latestDetail.number} / {stats.latestDetail.actual}
+              </span>
+              <span className="text-slate-400">当时推荐: [{stats.latestDetail.recommended.join(", ")}]</span>
+            </div>
+            <div className={`px-2.5 py-1 rounded-lg font-bold flex items-center gap-1.5 shrink-0 ${
+              stats.latestDetail.isHit 
+                ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40" 
+                : "bg-rose-500/20 text-rose-300 border border-rose-500/40"
+            }`}>
+              {stats.latestDetail.isHit ? (
+                <>
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>🎯 验证结果：成功命中特码！</span>
+                </>
+              ) : (
+                <>
+                  <XCircle className="w-3.5 h-3.5 text-rose-400" />
+                  <span>❌ 验证结果：未能命中</span>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* 录入下一期开奖结果 */}
       <div id="add-next-form" className="bg-white border border-gray-100 rounded-2xl shadow-xs overflow-hidden">
