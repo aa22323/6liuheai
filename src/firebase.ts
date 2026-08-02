@@ -15,7 +15,9 @@ export { firebaseConfig };
 const firebaseApp = initializeApp(firebaseConfig);
 
 // Initialize Firestore with correct database ID
-export const db = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
+export const db = (firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== "(default)")
+  ? getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId)
+  : getFirestore(firebaseApp);
 
 // CSV standard seed data (142 records) to bootstrap Firestore on first load if it's empty
 const HISTORY_SEED_DATA: Omit<HistoryRecord, "id">[] = [

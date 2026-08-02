@@ -86,7 +86,9 @@ app.use("/api", (req, res, next) => {
     try {
       const firebaseConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
       const firebaseApp = initializeApp(firebaseConfig);
-      db = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
+      db = (firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== "(default)")
+        ? getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId)
+        : getFirestore(firebaseApp);
       console.log("[Firebase] Firestore initialized with databaseId:", firebaseConfig.firestoreDatabaseId || "(default)");
     } catch (error: any) {
       console.error("[Firebase Error] Failed to initialize Firebase:", error.message);

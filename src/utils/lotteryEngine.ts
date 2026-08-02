@@ -871,33 +871,47 @@ export function optimizeSettings(
   const currentSettings: IndicatorSettings = JSON.parse(JSON.stringify(initialSettings));
   const indicatorKeys = Object.keys(DEFAULT_SETTINGS.indicators);
 
-  // 第一阶段：因子开关贪心筛选 (Feature Switch Selection)
-  log(`\n🔍 [阶段一] 因子有效性开关判定 (贪心测试 21 项因子)...`);
+  // 第一阶段：多轮（2轮）双向因子筛选与开关修剪 (Multi-Pass Pruning & Activation)
+  log(`\n🔍 [阶段一] 因子有效性与去噪深度测试 (双向贪心筛查 21 项因子)...`);
   
-  indicatorKeys.forEach((indKey, idx) => {
-    if (onStepProgress) {
-      onStepProgress(idx + 1, indicatorKeys.length * 2, `评估因子 ${indKey} 开关状态...`);
-    }
+  // 进行 2 轮开关迭代，既检测“开启是否带来提升”，也检测“关闭无效因子（噪音）是否能提升或保持更高胜率”
+  for (let pass = 1; pass <= 2; pass++) {
+    log(`   ➔ 第 ${pass} 轮因子去噪与组合优化...`);
+    indicatorKeys.forEach((indKey, idx) => {
+      if (onStepProgress) {
+        onStepProgress(
+          (pass - 1) * indicatorKeys.length + idx + 1,
+          indicatorKeys.length * 3,
+          `第${pass}轮去噪筛查: ${indKey}...`
+        );
+      }
 
-    const isCurrentlyOn = !!currentSettings.indicators[indKey];
-    const trialSettings: IndicatorSettings = JSON.parse(JSON.stringify(currentSettings));
-    
-    // 尝试切换状态
-    trialSettings.indicators[indKey] = !isCurrentlyOn;
+      const isCurrentlyOn = !!currentSettings.indicators[indKey];
+      const trialSettings: IndicatorSettings = JSON.parse(JSON.stringify(currentSettings));
+      
+      // 尝试反转状态（开启变为关闭，关闭变为开启）
+      trialSettings.indicators[indKey] = !isCurrentlyOn;
 
-    const trialRes = runWalkForwardBacktest(df, startPeriod, endPeriod, trialSettings);
-    const trialHitRate = trialRes.hitRate;
+      const trialRes = runWalkForwardBacktest(df, startPeriod, endPeriod, trialSettings);
+      const trialHitRate = trialRes.hitRate;
 
-    if (trialHitRate > bestHitRate) {
-      currentSettings.indicators[indKey] = !isCurrentlyOn;
-      const delta = trialHitRate - bestHitRate;
-      bestHitRate = trialHitRate;
-      log(`  ✔ [因子调整] ${indKey} 切换为 [${!isCurrentlyOn ? "开启" : "关闭"}] ➔ 命中率提升 +${delta.toFixed(2)}% (${bestHitRate.toFixed(2)}%)`);
-    }
-  });
+      // 如果反转后命中率严格增加，则采用新状态（开启有效因子，关闭噪音因子）
+      if (trialHitRate > bestHitRate + 0.001) {
+        currentSettings.indicators[indKey] = !isCurrentlyOn;
+        const delta = trialHitRate - bestHitRate;
+        bestHitRate = trialHitRate;
+        log(`  ✔ [因子去噪] ${indKey} 调整为 [${!isCurrentlyOn ? "开启" : "静默/关闭"}] ➔ 命中率提升 +${delta.toFixed(2)}% (${bestHitRate.toFixed(2)}%)`);
+      } else if (isCurrentlyOn && Math.abs(trialHitRate - bestHitRate) <= 0.001) {
+        // 【关键去噪机制】如果关闭该因子后，整体滚动预测胜率没有任何下降（说明该因子是不起作用的冗余噪音或产生负面干扰），
+        // 自动将其关闭以简化决策模型，提高对将来的预测稳健性！
+        currentSettings.indicators[indKey] = false;
+        log(`  🛡 [去除冗余] ${indKey} 对预测无积极贡献，已自动调为 [静默/关闭] (保持胜率 ${bestHitRate.toFixed(2)}%)`);
+      }
+    });
+  }
 
   // 第二阶段：因子权重坐标下降深探 (Coordinate Descent Weight Optimization)
-  log(`\n⚡ [阶段二] 因子权重系数深度寻优 (针对正加分与负惩罚因子进行自适应步长调优)...`);
+  log(`\n⚡ [阶段二] 活跃因子权重系数自适应调优...`);
 
   const activeIndicators = indicatorKeys.filter(k => currentSettings.indicators[k]);
 
@@ -907,8 +921,8 @@ export function optimizeSettings(
 
     if (onStepProgress) {
       onStepProgress(
-        indicatorKeys.length + idx + 1,
-        indicatorKeys.length * 2,
+        indicatorKeys.length * 2 + idx + 1,
+        indicatorKeys.length * 3,
         `优化权重 ${wKey}...`
       );
     }
