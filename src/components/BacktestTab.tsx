@@ -46,7 +46,8 @@ export default function BacktestTab({ history, activeSettings, setActiveSettings
   const [cumulativeStats, setCumulativeStats] = useState<any>({
     total: 0,
     hits: 0,
-    rate: 0
+    rate: 0,
+    maxMisses: 0
   });
 
   // 寻优状态
@@ -55,6 +56,7 @@ export default function BacktestTab({ history, activeSettings, setActiveSettings
   const [optProgress, setOptProgress] = useState<number>(0);
   const [optimizationResult, setOptimizationResult] = useState<OptimizationResult | null>(null);
   const [optTrainWindow, setOptTrainWindow] = useState<number>(50); // 默认选择近50期训练集
+  const [optPenaltyWeight, setOptPenaltyWeight] = useState<number>(1.5); // 默认防连挂(连续不中)惩罚权重为 1.5
 
   // 折线图数据
   const [chartData, setChartData] = useState<any[]>([]);
@@ -89,7 +91,7 @@ export default function BacktestTab({ history, activeSettings, setActiveSettings
     setBacktestLogs([]);
     setChartData([]);
     setCurrentIndex(0);
-    setCumulativeStats({ total: 0, hits: 0, rate: 0 });
+    setCumulativeStats({ total: 0, hits: 0, rate: 0, maxMisses: 0 });
 
     let tempHits = 0;
     let index = 0;
@@ -134,6 +136,20 @@ export default function BacktestTab({ history, activeSettings, setActiveSettings
         tempLogs.push(detail);
         setBacktestLogs([...tempLogs].reverse()); // 倒序排列
 
+        // 计算当前最大的连挂期数 (连续未中)
+        let maxMisses = 0;
+        let currMisses = 0;
+        tempLogs.forEach(log => {
+          if (!log.isHit) {
+            currMisses++;
+            if (currMisses > maxMisses) {
+              maxMisses = currMisses;
+            }
+          } else {
+            currMisses = 0;
+          }
+        });
+
         // 折线图记录
         tempChart.push({
           period: `第${p}期`,
@@ -145,7 +161,8 @@ export default function BacktestTab({ history, activeSettings, setActiveSettings
         setCumulativeStats({
           total: totalTests,
           hits: tempHits,
-          rate: Math.round(currentRate * 100) / 100
+          rate: Math.round(currentRate * 100) / 100,
+          maxMisses
         });
       }
 
@@ -157,7 +174,7 @@ export default function BacktestTab({ history, activeSettings, setActiveSettings
   const handleReset = () => {
     setBacktestLogs([]);
     setChartData([]);
-    setCumulativeStats({ total: 0, hits: 0, rate: 0 });
+    setCumulativeStats({ total: 0, hits: 0, rate: 0, maxMisses: 0 });
     setRunning(false);
   };
 
@@ -354,7 +371,8 @@ export default function BacktestTab({ history, activeSettings, setActiveSettings
             const pct = Math.min(95, Math.round((step / total) * 90) + 5);
             setOptProgress(pct);
             pushLog(`🔍 [梯度寻找] (${step}/${total}) ${msg}`);
-          }
+          },
+          optPenaltyWeight
         );
 
         setOptProgress(100);
@@ -362,7 +380,7 @@ export default function BacktestTab({ history, activeSettings, setActiveSettings
         setOptLogs(result.logs);
         setOptimizing(false);
 
-        showToast(`🎉 因子权重寻优完成！最佳滚动回测命中率由 ${result.initialHitRate}% 提升至 ${result.bestHitRate}% (+${result.improvement}%)！`);
+        showToast(`🎉 因子权重寻优完成！最佳回测命中率由 ${result.initialHitRate}% 提升至 ${result.bestHitRate}%，最大连挂由 ${result.initialMaxConsecutiveMisses} 期降至 ${result.bestMaxConsecutiveMisses} 期！`);
       } catch (err: any) {
         console.error("Optimize error:", err);
         pushLog("❌ 寻优过程中发生异常: " + err.message);
@@ -455,7 +473,7 @@ export default function BacktestTab({ history, activeSettings, setActiveSettings
       </div>
 
       {/* 数据汇总卡片组 */}
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-5 gap-4">
         <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-xs space-y-1.5">
           <div className="text-xs text-gray-400 font-semibold uppercase tracking-wider">滚动测试期数</div>
           <div className="font-mono text-2xl font-black text-slate-800">
@@ -493,6 +511,17 @@ export default function BacktestTab({ history, activeSettings, setActiveSettings
             {performanceImprovement >= 0 ? "+" : ""}{performanceImprovement.toFixed(1)}%
           </div>
           <div className="text-xs text-emerald-600 font-medium">对比随机预测大数差距</div>
+        </div>
+
+        <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-xs space-y-1.5 bg-gradient-to-br from-red-500/5 to-transparent border-red-100/40">
+          <div className="text-xs text-red-800 font-semibold uppercase tracking-wider flex items-center gap-1">
+            <AlertTriangle className="w-3.5 h-3.5" />
+            最大预测连挂
+          </div>
+          <div className="font-mono text-2xl font-black text-red-600">
+            {cumulativeStats.maxMisses ?? 0} <span className="text-sm font-medium text-gray-400">期</span>
+          </div>
+          <div className="text-xs text-red-600 font-medium">连续不中的最高期数(越低越稳)</div>
         </div>
       </div>
 
@@ -624,9 +653,8 @@ export default function BacktestTab({ history, activeSettings, setActiveSettings
                 </div>
               </div>
               
-              <div className="flex items-center gap-3 self-stretch sm:self-auto justify-between sm:justify-end">
-                {/* 训练窗口选择 */}
-                <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-xl border border-gray-200/60 text-xs flex-wrap sm:flex-nowrap">
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 self-stretch w-full">
+                <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-xl border border-gray-200/60 text-xs flex-wrap">
                   <span className="text-gray-400 pl-1.5 text-[11px] font-medium hidden md:inline">训练集:</span>
                   {[30, 50, 80, 100, 0].map(w => (
                     <button
@@ -645,10 +673,33 @@ export default function BacktestTab({ history, activeSettings, setActiveSettings
                   ))}
                 </div>
 
+                <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-xl border border-gray-200/60 text-xs flex-wrap">
+                  <span className="text-gray-400 pl-1.5 text-[11px] font-medium hidden md:inline">防连挂策略偏好:</span>
+                  {[
+                    { val: 0.0, label: "追求最高胜率" },
+                    { val: 1.5, label: "胜率连挂均衡" },
+                    { val: 3.5, label: "强力规避连挂" }
+                  ].map(opt => (
+                    <button
+                      key={opt.val}
+                      type="button"
+                      onClick={() => setOptPenaltyWeight(opt.val)}
+                      disabled={optimizing}
+                      className={`px-2.5 py-1 font-bold rounded-lg transition-all cursor-pointer ${
+                        optPenaltyWeight === opt.val
+                          ? "bg-white text-purple-700 shadow-xs font-black"
+                          : "text-gray-500 hover:text-gray-900"
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+
                 <button
                   onClick={handleOptimize}
                   disabled={running || optimizing}
-                  className="flex items-center justify-center gap-1.5 bg-purple-600 hover:bg-purple-700 active:scale-98 disabled:opacity-50 text-white font-bold text-xs py-2.5 px-4 rounded-xl shadow-xs transition-all shrink-0 cursor-pointer"
+                  className="flex items-center justify-center gap-1.5 bg-purple-600 hover:bg-purple-700 active:scale-98 disabled:opacity-50 text-white font-bold text-xs py-2.5 px-4 rounded-xl shadow-xs transition-all shrink-0 cursor-pointer self-stretch md:self-auto"
                 >
                   <Sparkles className={`w-4 h-4 ${optimizing ? "animate-spin" : ""}`} />
                   <span>{optimizing ? "算法正在寻优..." : "⚡ 启动因子权重寻优"}</span>
@@ -717,20 +768,26 @@ export default function BacktestTab({ history, activeSettings, setActiveSettings
 
                   <div className="flex items-center gap-6 shrink-0 bg-white/10 backdrop-blur-md p-3.5 rounded-xl border border-white/10 self-stretch md:self-auto justify-around">
                     <div className="text-center space-y-0.5">
-                      <div className="text-[10px] text-slate-400 uppercase font-bold">寻优前胜率</div>
-                      <div className="font-mono text-lg font-bold text-slate-300">{optimizationResult.initialHitRate.toFixed(1)}%</div>
+                      <div className="text-[10px] text-slate-400 uppercase font-bold">寻优前表现</div>
+                      <div className="font-mono text-sm font-bold text-slate-300">
+                        {optimizationResult.initialHitRate.toFixed(1)}% / {optimizationResult.initialMaxConsecutiveMisses}期连挂
+                      </div>
                     </div>
 
-                    <div className="text-slate-500 font-bold text-xl">➔</div>
+                    <div className="text-slate-500 font-bold text-lg">➔</div>
 
                     <div className="text-center space-y-0.5">
-                      <div className="text-[10px] text-emerald-400 uppercase font-extrabold">黄金最佳胜率</div>
-                      <div className="font-mono text-2xl font-black text-emerald-400">{optimizationResult.bestHitRate.toFixed(1)}%</div>
+                      <div className="text-[10px] text-emerald-400 uppercase font-extrabold">黄金最佳方案</div>
+                      <div className="font-mono text-base font-black text-emerald-400">
+                        {optimizationResult.bestHitRate.toFixed(1)}% / {optimizationResult.bestMaxConsecutiveMisses}期连挂
+                      </div>
                     </div>
 
                     <div className="text-center space-y-0.5 pl-2 border-l border-white/15">
-                      <div className="text-[10px] text-amber-300 uppercase font-bold">胜率极速提升</div>
-                      <div className="font-mono text-lg font-black text-amber-400">+{optimizationResult.improvement.toFixed(1)}%</div>
+                      <div className="text-[10px] text-amber-300 uppercase font-bold">连挂减少</div>
+                      <div className="font-mono text-base font-black text-amber-400">
+                        -{optimizationResult.initialMaxConsecutiveMisses - optimizationResult.bestMaxConsecutiveMisses} 期
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -783,14 +840,26 @@ export default function BacktestTab({ history, activeSettings, setActiveSettings
                               </td>
 
                               <td className="py-2 px-3 font-sans">
-                                {wc.newEnabled ? (
-                                  <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100/70 px-1.5 py-0.5 rounded">
-                                    已启用
-                                  </span>
+                                {isStatusChanged ? (
+                                  <div className="flex items-center gap-1">
+                                    <span className="text-[10px] font-medium text-slate-400 line-through">
+                                      {wc.oldEnabled ? "开启" : "静默"}
+                                    </span>
+                                    <span className="text-[10px] text-purple-400">➔</span>
+                                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${wc.newEnabled ? "text-emerald-700 bg-emerald-100/70" : "text-slate-400 bg-slate-200/60"}`}>
+                                      {wc.newEnabled ? "开启" : "静默"}
+                                    </span>
+                                  </div>
                                 ) : (
-                                  <span className="text-[10px] font-bold text-slate-400 bg-slate-200/60 px-1.5 py-0.5 rounded">
-                                    静默/关
-                                  </span>
+                                  wc.newEnabled ? (
+                                    <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100/70 px-1.5 py-0.5 rounded">
+                                      已启用
+                                    </span>
+                                  ) : (
+                                    <span className="text-[10px] font-bold text-slate-400 bg-slate-200/60 px-1.5 py-0.5 rounded">
+                                      静默/关
+                                    </span>
+                                  )
                                 )}
                               </td>
 
@@ -806,6 +875,10 @@ export default function BacktestTab({ history, activeSettings, setActiveSettings
                                 {isWeightChanged ? (
                                   <span className={wc.newWeight > wc.oldWeight ? (isPenalty ? "text-amber-600" : "text-emerald-600") : "text-blue-600"}>
                                     {wc.oldWeight.toFixed(1)}x ➔ {wc.newWeight.toFixed(1)}x
+                                  </span>
+                                ) : isStatusChanged ? (
+                                  <span className="text-purple-600 text-[11px] font-bold">
+                                    {wc.newEnabled ? "🔌 激活此因子" : "🔇 静默/屏蔽"}
                                   </span>
                                 ) : (
                                   <span className="text-slate-300">无变动</span>

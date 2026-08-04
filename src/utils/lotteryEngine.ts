@@ -675,6 +675,7 @@ export interface BacktestResult {
   totalPeriods: number;
   randomHitRate: number;
   improvement: number;
+  maxConsecutiveMisses: number;
   details: BacktestDetail[];
 }
 
@@ -740,12 +741,27 @@ export function runWalkForwardBacktest(
   const randomHitRate = (recommendCount / 12) * 100;
   const improvement = randomHitRate > 0 ? ((hitRate - randomHitRate) / randomHitRate) * 100 : 0;
 
+  // Calculate maximum consecutive misses (连挂)
+  let maxConsecutiveMisses = 0;
+  let currentConsecutiveMisses = 0;
+  details.forEach(d => {
+    if (!d.isHit) {
+      currentConsecutiveMisses++;
+      if (currentConsecutiveMisses > maxConsecutiveMisses) {
+        maxConsecutiveMisses = currentConsecutiveMisses;
+      }
+    } else {
+      currentConsecutiveMisses = 0;
+    }
+  });
+
   return {
     hitRate: Math.round(hitRate * 100) / 100,
     hits,
     totalPeriods: totalTests,
     randomHitRate: Math.round(randomHitRate * 100) / 100,
     improvement: Math.round(improvement * 100) / 100,
+    maxConsecutiveMisses,
     details
   };
 }
@@ -809,6 +825,8 @@ export interface OptimizationResult {
   improvement: number;
   weightChanges: WeightChangeItem[];
   logs: string[];
+  initialMaxConsecutiveMisses: number;
+  bestMaxConsecutiveMisses: number;
 }
 
 /**
@@ -839,14 +857,15 @@ export const INDICATOR_TO_WEIGHT_MAP: Record<string, string> = {
 };
 
 /**
- * 因子权重智能优化器 (真实坐标下降与多轮参数自适应寻优)
+ * 因子权重智能优化器 (真实坐标下降与多轮参数自适应寻优，融合最大连挂惩罚)
  */
 export function optimizeSettings(
   df: HistoryRecord[],
   startPeriod = 151,
   endPeriod = 191,
   baseSettings?: IndicatorSettings,
-  onStepProgress?: (step: number, total: number, msg: string) => void
+  onStepProgress?: (step: number, total: number, msg: string) => void,
+  consecutiveMissPenaltyWeight = 2.0
 ): OptimizationResult {
   const logs: string[] = [];
   const log = (msg: string) => {
@@ -860,21 +879,26 @@ export function optimizeSettings(
 
   log(`🚀 启动 AI 因子权重智能优化引擎...`);
   log(`📊 滚动训练区间: 第 ${startPeriod} 期 ➔ 第 ${endPeriod} 期`);
+  log(`🛡 最大连挂(连续未中)惩罚项权重: ${consecutiveMissPenaltyWeight.toFixed(1)}`);
 
-  // 计算初始状态基准率
+  // 计算初始状态基准率与最大连挂
   const baseResult = runWalkForwardBacktest(df, startPeriod, endPeriod, initialSettings);
   const initialHitRate = baseResult.hitRate;
+  const initialMaxMisses = baseResult.maxConsecutiveMisses;
+  
   let bestHitRate = initialHitRate;
+  let bestMaxMisses = initialMaxMisses;
+  // 综合评估得分（Fitness）：胜率 - 惩罚权重 * 最大连挂期数
+  let bestFitness = initialHitRate - (consecutiveMissPenaltyWeight * initialMaxMisses);
 
-  log(`📌 初始策略基准命中率: ${initialHitRate.toFixed(2)}%`);
+  log(`📌 初始基准表现 -> 命中率: ${initialHitRate.toFixed(2)}% | 最大连挂: ${initialMaxMisses}期 | 综合评分: ${bestFitness.toFixed(2)}`);
 
   const currentSettings: IndicatorSettings = JSON.parse(JSON.stringify(initialSettings));
   const indicatorKeys = Object.keys(DEFAULT_SETTINGS.indicators);
 
   // 第一阶段：多轮（2轮）双向因子筛选与开关修剪 (Multi-Pass Pruning & Activation)
-  log(`\n🔍 [阶段一] 因子有效性与去噪深度测试 (双向贪心筛查 21 项因子)...`);
+  log(`\n🔍 [阶段一] 因子有效性与去噪深度测试 (双向贪心筛查 21 项因子，优化综合评分)...`);
   
-  // 进行 2 轮开关迭代，既检测“开启是否带来提升”，也检测“关闭无效因子（噪音）是否能提升或保持更高胜率”
   for (let pass = 1; pass <= 2; pass++) {
     log(`   ➔ 第 ${pass} 轮因子去噪与组合优化...`);
     indicatorKeys.forEach((indKey, idx) => {
@@ -894,24 +918,34 @@ export function optimizeSettings(
 
       const trialRes = runWalkForwardBacktest(df, startPeriod, endPeriod, trialSettings);
       const trialHitRate = trialRes.hitRate;
+      const trialMaxMisses = trialRes.maxConsecutiveMisses;
+      const trialFitness = trialHitRate - (consecutiveMissPenaltyWeight * trialMaxMisses);
 
-      // 如果反转后命中率严格增加，则采用新状态（开启有效因子，关闭噪音因子）
-      if (trialHitRate > bestHitRate + 0.001) {
+      // 如果反转后综合评分（Fitness）严格增加，则采用新状态（开启有效因子，关闭噪音因子）
+      if (trialFitness > bestFitness + 0.001) {
         currentSettings.indicators[indKey] = !isCurrentlyOn;
-        const delta = trialHitRate - bestHitRate;
+        const deltaHit = trialHitRate - bestHitRate;
+        const deltaMisses = trialMaxMisses - bestMaxMisses;
+        bestFitness = trialFitness;
         bestHitRate = trialHitRate;
-        log(`  ✔ [因子去噪] ${indKey} 调整为 [${!isCurrentlyOn ? "开启" : "静默/关闭"}] ➔ 命中率提升 +${delta.toFixed(2)}% (${bestHitRate.toFixed(2)}%)`);
-      } else if (isCurrentlyOn && Math.abs(trialHitRate - bestHitRate) <= 0.001) {
-        // 【关键去噪机制】如果关闭该因子后，整体滚动预测胜率没有任何下降（说明该因子是不起作用的冗余噪音或产生负面干扰），
-        // 自动将其关闭以简化决策模型，提高对将来的预测稳健性！
-        currentSettings.indicators[indKey] = false;
-        log(`  🛡 [去除冗余] ${indKey} 对预测无积极贡献，已自动调为 [静默/关闭] (保持胜率 ${bestHitRate.toFixed(2)}%)`);
+        bestMaxMisses = trialMaxMisses;
+        log(`  ✔ [因子去噪] ${indKey} 调为 [${!isCurrentlyOn ? "开启" : "静默/关闭"}] ➔ 胜率变化: ${deltaHit >= 0 ? "+" : ""}${deltaHit.toFixed(2)}%, 最大连挂变化: ${deltaMisses >= 0 ? "+" : ""}${deltaMisses}期 (综合评分提升至 ${bestFitness.toFixed(2)})`);
+      } else if (isCurrentlyOn && Math.abs(trialFitness - bestFitness) <= 0.001) {
+        // 保证系统至少保留 4 项活跃分析因子，避免模型完全退化
+        const activeCount = Object.values(currentSettings.indicators).filter(Boolean).length;
+        if (activeCount > 4) {
+          currentSettings.indicators[indKey] = false;
+          bestFitness = trialFitness;
+          bestHitRate = trialHitRate;
+          bestMaxMisses = trialMaxMisses;
+          log(`  🛡 [去除冗余] ${indKey} 对综合评分无贡献，已调为 [静默/关闭] (保持评分 ${bestFitness.toFixed(2)})`);
+        }
       }
     });
   }
 
   // 第二阶段：因子权重坐标下降深探 (Coordinate Descent Weight Optimization)
-  log(`\n⚡ [阶段二] 活跃因子权重系数自适应调优...`);
+  log(`\n⚡ [阶段二] 活跃因子权重系数自适应调优 (坐标下降法)...`);
 
   const activeIndicators = indicatorKeys.filter(k => currentSettings.indicators[k]);
 
@@ -929,14 +963,12 @@ export function optimizeSettings(
 
     const currentW = currentSettings.weights[wKey] ?? 1.0;
     
-    // 针对负惩罚因子（如连开惩罚）与正加分因子设计探针集合
+    // 针对负惩罚因子与正加分因子设计探针集合
     let candidateWeights: number[] = [];
 
     if (currentW < 0 || indKey.includes("PENALTY")) {
-      // 负惩罚因子候选步长（扩大惩罚或微调减小惩罚）
       candidateWeights = [-0.5, -1.0, -1.5, -2.0, -2.5, -3.0, -4.0, -5.0, -6.0, -8.0, 0.0];
     } else {
-      // 正向因子候选倍率及绝对步长
       candidateWeights = [
         currentW * 0.2,
         currentW * 0.5,
@@ -971,11 +1003,18 @@ export function optimizeSettings(
       trialSettings.weights[wKey] = trialW;
 
       const trialRes = runWalkForwardBacktest(df, startPeriod, endPeriod, trialSettings);
-      if (trialRes.hitRate > bestHitRate) {
-        const delta = trialRes.hitRate - bestHitRate;
-        bestHitRate = trialRes.hitRate;
+      const trialHitRate = trialRes.hitRate;
+      const trialMaxMisses = trialRes.maxConsecutiveMisses;
+      const trialFitness = trialHitRate - (consecutiveMissPenaltyWeight * trialMaxMisses);
+
+      if (trialFitness > bestFitness) {
+        const deltaHit = trialHitRate - bestHitRate;
+        const deltaMisses = trialMaxMisses - bestMaxMisses;
+        bestFitness = trialFitness;
+        bestHitRate = trialHitRate;
+        bestMaxMisses = trialMaxMisses;
         bestWForThisKey = trialW;
-        log(`  ★ [权重升级] ${wKey}: ${currentW.toFixed(1)}x ➔ ${trialW.toFixed(1)}x | 命中率提升 +${delta.toFixed(2)}% (${bestHitRate.toFixed(2)}%)`);
+        log(`  ★ [权重升级] ${wKey}: ${currentW.toFixed(1)}x ➔ ${trialW.toFixed(1)}x | 胜率变化: ${deltaHit >= 0 ? "+" : ""}${deltaHit.toFixed(2)}%, 最大连挂变化: ${deltaMisses >= 0 ? "+" : ""}${deltaMisses}期 (综合评分提升至 ${bestFitness.toFixed(2)})`);
       }
     });
 
@@ -1000,7 +1039,8 @@ export function optimizeSettings(
     singleTrialSettings.indicators[indKey] = oldEnabled;
 
     const singleRes = runWalkForwardBacktest(df, startPeriod, endPeriod, singleTrialSettings);
-    const impact = Math.round((bestHitRate - singleRes.hitRate) * 100) / 100;
+    const singleFitness = singleRes.hitRate - (consecutiveMissPenaltyWeight * singleRes.maxConsecutiveMisses);
+    const impact = Math.round((bestFitness - singleFitness) * 100) / 100;
 
     weightChanges.push({
       key: indKey,
@@ -1017,7 +1057,9 @@ export function optimizeSettings(
   const improvement = Math.round((bestHitRate - initialHitRate) * 100) / 100;
 
   log(`\n🎉 AI 因子权重寻优圆满完成！`);
-  log(`🎯 最佳命中率: ${bestHitRate.toFixed(2)}% (对比原始提升 +${improvement.toFixed(2)}%)`);
+  log(`🎯 初始指标 -> 命中率: ${initialHitRate.toFixed(2)}% | 最大连挂: ${initialMaxMisses}期`);
+  log(`🎯 最佳指标 -> 命中率: ${bestHitRate.toFixed(2)}% | 最大连挂: ${bestMaxMisses}期 (连挂较最初减少 ${initialMaxMisses - bestMaxMisses} 期)`);
+  log(`🎯 综合评估最佳评分: ${bestFitness.toFixed(2)} (比原始评分提升 +${(bestFitness - (initialHitRate - consecutiveMissPenaltyWeight * initialMaxMisses)).toFixed(2)})`);
 
   return {
     settings: currentSettings,
@@ -1025,6 +1067,8 @@ export function optimizeSettings(
     bestHitRate: Math.round(bestHitRate * 100) / 100,
     improvement,
     weightChanges,
-    logs
+    logs,
+    initialMaxConsecutiveMisses: initialMaxMisses,
+    bestMaxConsecutiveMisses: bestMaxMisses
   };
 }
