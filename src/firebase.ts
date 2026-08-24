@@ -193,34 +193,45 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs = 3000): Promise<T> {
  * If Firestore hangs or fails, falls back to static seed data.
  */
 export async function getHistoryRecords(): Promise<HistoryRecord[]> {
-  // 1. Try Express Backend API first (fast and robust, force fresh fetch)
+  // 1. Try Express Backend API first (fast and robust, force fresh fetch with 8s timeout)
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+
     const response = await fetch(`/api/history?_t=${Date.now()}`, { 
       cache: "no-store",
-      headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
+      headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' },
+      signal: controller.signal
     });
+    clearTimeout(timeoutId);
+
     if (response.ok) {
       const result = await response.json();
       if (result.success && Array.isArray(result.data) && result.data.length > 0) {
-        console.log(`[Firebase client] Successfully loaded ${result.data.length} records via Express API.`);
-        return result.data.map((r: any) => ({
+        const records = result.data.map((r: any) => ({
           period: Number(r.period),
           number: Number(r.number),
           zodiac: String(r.zodiac)
         }));
+        console.log(`[Firebase client] Successfully loaded ${records.length} records via Express API.`);
+        // Save to localStorage cache for offline/cellular fallback
+        try {
+          localStorage.setItem("lottery_history_cache", JSON.stringify(records));
+        } catch (e) {}
+        return records;
       }
     }
   } catch (apiError: any) {
     console.warn("[Firebase client API Warning] Failed to fetch via Express API, falling back to direct Firestore:", apiError.message);
   }
 
-  // 2. Direct Firestore fallback with 3-second timeout
+  // 2. Direct Firestore fallback with 8-second timeout
   try {
     const collRef = collection(db, "history");
     const q = query(collRef, orderBy("period", "asc"));
     
     console.log("[Firebase client] Initiating direct Firestore server fetch (bypassing mobile cache) for 'history' collection...");
-    const snapshot = await withTimeout(getDocsFromServer(q), 3000);
+    const snapshot = await withTimeout(getDocsFromServer(q), 8000);
     
     const records: HistoryRecord[] = [];
     snapshot.forEach(docSnap => {
@@ -234,30 +245,30 @@ export async function getHistoryRecords(): Promise<HistoryRecord[]> {
 
     if (records.length > 0) {
       console.log(`[Firebase client] Loaded ${records.length} records directly from Firestore.`);
+      try {
+        localStorage.setItem("lottery_history_cache", JSON.stringify(records));
+      } catch (e) {}
       return records;
     }
-
-    // Seed Firestore if empty
-    console.log("[Firebase client] Firestore collection empty. Seeding with 142 records...");
-    const batch = writeBatch(db);
-    HISTORY_SEED_DATA.forEach(r => {
-      const docRef = doc(db, "history", String(r.period));
-      batch.set(docRef, {
-        period: r.period,
-        number: r.number,
-        zodiac: r.zodiac,
-        createdAt: new Date().toISOString()
-      });
-    });
-    await withTimeout(batch.commit(), 3000);
-
-    console.log("[Firebase client] Successfully seeded Firestore.");
-    return HISTORY_SEED_DATA.map(r => ({ ...r }));
   } catch (error: any) {
-    console.error("[Firebase client Error] Direct Firestore fetch failed or timed out. Falling back to static local seeds:", error.message);
-    // 3. Fallback to local seeds (instant load under any offline/stuck circumstances)
-    return HISTORY_SEED_DATA.map(r => ({ ...r }));
+    console.warn("[Firebase client Warning] Direct Firestore fetch failed or timed out:", error.message);
   }
+
+  // 3. Check localStorage cache as primary offline/cellular network fallback
+  try {
+    const cached = localStorage.getItem("lottery_history_cache");
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        console.log(`[Firebase client] Loaded ${parsed.length} records from localStorage cache.`);
+        return parsed;
+      }
+    }
+  } catch (e) {}
+
+  // 4. Final fallback to static seed data
+  console.log("[Firebase client] Falling back to static seed data.");
+  return HISTORY_SEED_DATA.map(r => ({ ...r }));
 }
 
 /**
