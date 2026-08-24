@@ -195,7 +195,10 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs = 3000): Promise<T> {
 export async function getHistoryRecords(): Promise<HistoryRecord[]> {
   // 1. Try Express Backend API first (fast and robust, force fresh fetch)
   try {
-    const response = await fetch(`/api/history?_t=${Date.now()}`, { cache: "no-store" });
+    const response = await fetch(`/api/history?_t=${Date.now()}`, { 
+      cache: "no-store",
+      headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
+    });
     if (response.ok) {
       const result = await response.json();
       if (result.success && Array.isArray(result.data) && result.data.length > 0) {
@@ -348,7 +351,10 @@ export async function deleteHistoryRecord(period: number): Promise<void> {
 export async function getStrategyConfig(): Promise<any> {
   // 1. Try Backend API
   try {
-    const response = await fetch(`/api/config?_t=${Date.now()}`, { cache: "no-store" });
+    const response = await fetch(`/api/config?_t=${Date.now()}`, { 
+      cache: "no-store",
+      headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
+    });
     if (response.ok) {
       const result = await response.json();
       if (result.success && result.config) {
@@ -406,7 +412,10 @@ export async function saveStrategyConfig(config: any): Promise<void> {
 export async function getSavedAiReport(period: number): Promise<string | null> {
   try {
     // 1. Try Backend API
-    const response = await fetch(`/api/reports/prediction-results`);
+    const response = await fetch(`/api/reports/prediction-results?_t=${Date.now()}`, { 
+      cache: "no-store",
+      headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
+    });
     if (response.ok) {
       const result = await response.json();
       if (result.success && result.data && result.data.period === period && result.data.report) {
