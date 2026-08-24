@@ -4,7 +4,7 @@
  */
 
 import { initializeApp } from "firebase/app";
-import { getFirestore, collection, doc, getDoc, getDocs, setDoc, deleteDoc, writeBatch, query, orderBy } from "firebase/firestore";
+import { getFirestore, collection, doc, getDoc, getDocs, getDocsFromServer, setDoc, deleteDoc, writeBatch, query, orderBy } from "firebase/firestore";
 import { HistoryRecord, DEFAULT_SETTINGS } from "./utils/lotteryEngine";
 
 import firebaseConfig from "../firebase-applet-config.json";
@@ -216,8 +216,8 @@ export async function getHistoryRecords(): Promise<HistoryRecord[]> {
     const collRef = collection(db, "history");
     const q = query(collRef, orderBy("period", "asc"));
     
-    console.log("[Firebase client] Initiating direct Firestore fetch for 'history' collection...");
-    const snapshot = await withTimeout(getDocs(q), 3000);
+    console.log("[Firebase client] Initiating direct Firestore server fetch (bypassing mobile cache) for 'history' collection...");
+    const snapshot = await withTimeout(getDocsFromServer(q), 3000);
     
     const records: HistoryRecord[] = [];
     snapshot.forEach(docSnap => {

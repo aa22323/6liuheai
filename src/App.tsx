@@ -70,6 +70,28 @@ export default function App() {
       .catch((err) => {
         console.error("Failed to load Firebase config:", err);
       });
+
+    // Mobile browser visibility & bfcache refresh handler
+    const handleVisibilityOrPageShow = () => {
+      if (document.visibilityState === "visible") {
+        fetchHistory();
+      }
+    };
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) {
+        fetchHistory();
+      }
+    };
+
+    window.addEventListener("focus", handleVisibilityOrPageShow);
+    document.addEventListener("visibilitychange", handleVisibilityOrPageShow);
+    window.addEventListener("pageshow", handlePageShow);
+
+    return () => {
+      window.removeEventListener("focus", handleVisibilityOrPageShow);
+      document.removeEventListener("visibilitychange", handleVisibilityOrPageShow);
+      window.removeEventListener("pageshow", handlePageShow);
+    };
   }, []);
 
   // 实时重构前端特码与生肖对应关系（在 Render 期间同步更新，防止 React useEffect 异步滞后导致预览不同步）
