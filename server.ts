@@ -312,15 +312,29 @@ app.use("/api", (req, res, next) => {
       });
   }
 
-  // API Route: 获取全部历史记录 (自动丰富衍生字段)
+  // API Route: 获取全部历史记录 (实时直连 Firestore 确保多端同步无延迟)
   app.get("/api/history", async (req, res) => {
     try {
-      if (syncPromise && !isSynced) {
-        // 最多等待 3 秒 startup sync
-        await Promise.race([
-          syncPromise,
-          new Promise(resolve => setTimeout(resolve, 3000))
-        ]);
+      if (db) {
+        try {
+          const collRef = collection(db, "history");
+          const q = query(collRef, orderBy("period", "asc"));
+          const snapshot = await getDocs(q);
+          const firestoreRecords: any[] = [];
+          snapshot.forEach(docSnap => {
+            const data = docSnap.data();
+            firestoreRecords.push({
+              period: Number(data.period),
+              number: Number(data.number),
+              zodiac: String(data.zodiac)
+            });
+          });
+          if (firestoreRecords.length > 0) {
+            memoryHistory = firestoreRecords;
+          }
+        } catch (fbErr: any) {
+          console.warn("[API Warning] Direct Firestore fetch failed, using memory/CSV fallback:", fbErr.message);
+        }
       }
       const records = getHistoryData();
       const enriched = enrichData(records);
@@ -362,7 +376,19 @@ app.use("/api", (req, res, next) => {
         });
       }
 
-      // 1. 更新内存缓存 (覆盖或追加)
+      // 1. 同步保存至云端 Firestore 数据库 (同步 await 确保万无一失)
+      if (db) {
+        const docRef = doc(db, "history", String(parsedPeriod));
+        await setDoc(docRef, {
+          period: parsedPeriod,
+          number: parsedNumber,
+          zodiac: zodiac.trim(),
+          createdAt: new Date().toISOString()
+        });
+        console.log(`[Firebase] 成功将第 ${parsedPeriod} 期数据同步保存至云端 Firestore (覆盖/新建)。`);
+      }
+
+      // 2. 更新内存缓存 (覆盖或追加)
       const updatedRecord = { period: parsedPeriod, number: parsedNumber, zodiac: zodiac.trim() };
       if (isExisting) {
         memoryHistory[existingIndex] = updatedRecord;
@@ -370,23 +396,6 @@ app.use("/api", (req, res, next) => {
         memoryHistory.push(updatedRecord);
       }
       memoryHistory.sort((a, b) => a.period - b.period);
-
-      // 2. 异步同步保存至云端 Firestore 数据库 (后台执行，避免阻塞接口)
-      if (db) {
-        const docRef = doc(db, "history", String(parsedPeriod));
-        setDoc(docRef, {
-          period: parsedPeriod,
-          number: parsedNumber,
-          zodiac: zodiac.trim(),
-          createdAt: new Date().toISOString()
-        })
-          .then(() => {
-            console.log(`[Firebase] 成功将第 ${parsedPeriod} 期数据同步保存至云端 Firestore (覆盖/新建)。`);
-          })
-          .catch((error: any) => {
-            console.error(`[Firebase Error] 异步同步第 ${parsedPeriod} 期数据失败:`, error.message);
-          });
-      }
 
       res.json({ 
         success: true, 
@@ -414,20 +423,15 @@ app.use("/api", (req, res, next) => {
         return res.status(404).json({ success: false, error: `没有找到第 ${parsedPeriod} 期的开奖记录。` });
       }
 
-      // 从内存移除
-      memoryHistory.splice(existingIndex, 1);
-
-      // 从 Firestore 移除
+      // 从 Firestore 移除 (await 同步)
       if (db) {
         const docRef = doc(db, "history", String(parsedPeriod));
-        deleteDoc(docRef)
-          .then(() => {
-            console.log(`[Firebase] 成功将第 ${parsedPeriod} 期数据从云端 Firestore 移除。`);
-          })
-          .catch((error: any) => {
-            console.error(`[Firebase Error] 异步删除第 ${parsedPeriod} 期数据失败:`, error.message);
-          });
+        await deleteDoc(docRef);
+        console.log(`[Firebase] 成功将第 ${parsedPeriod} 期数据从云端 Firestore 移除。`);
       }
+
+      // 从内存移除
+      memoryHistory.splice(existingIndex, 1);
 
       res.json({ success: true, message: `第 ${parsedPeriod} 期的历史记录已成功删除并同步到云端。` });
     } catch (e: any) {
@@ -442,21 +446,18 @@ app.use("/api", (req, res, next) => {
         return res.status(400).json({ success: false, error: "没有可以删除的历史记录。" });
       }
       
-      const removedRecord = memoryHistory.pop();
-      const parsedPeriod = removedRecord.period;
+      const lastRecord = memoryHistory[memoryHistory.length - 1];
+      const parsedPeriod = lastRecord.period;
 
-      // 1. 异步从云端 Firestore 数据库删除对应期数数据 (后台非阻塞执行)
+      // 1. 从云端 Firestore 数据库删除对应期数数据 (同步 await)
       if (db && !isNaN(parsedPeriod)) {
         const docRef = doc(db, "history", String(parsedPeriod));
-        deleteDoc(docRef)
-          .then(() => {
-            console.log(`[Firebase] 成功将第 ${parsedPeriod} 期数据从云端 Firestore 移除。`);
-          })
-          .catch((error: any) => {
-            console.error(`[Firebase Error] 异步从 Firestore 移除第 ${parsedPeriod} 期数据失败:`, error.message);
-          });
+        await deleteDoc(docRef);
+        console.log(`[Firebase] 成功将第 ${parsedPeriod} 期数据从云端 Firestore 移除。`);
       }
       
+      memoryHistory.pop();
+
       res.json({ success: true, message: `最后一期历史记录 (第 ${parsedPeriod} 期) 已从云端数据库删除。` });
     } catch (e: any) {
       res.status(500).json({ success: false, error: e.message });
