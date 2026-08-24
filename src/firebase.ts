@@ -360,23 +360,7 @@ export async function deleteHistoryRecord(period: number): Promise<void> {
  * Defaults to DEFAULT_SETTINGS if empty.
  */
 export async function getStrategyConfig(): Promise<any> {
-  // 1. Direct Firestore fetch first (guaranteeing user's saved settings in Firestore are retrieved)
-  try {
-    const docRef = doc(db, "config", "current");
-    const snap = await withTimeout(getDoc(docRef), 6000);
-    if (snap.exists()) {
-      const data = snap.data();
-      console.log("[Firebase client] Successfully loaded config directly from Firestore.");
-      try {
-        localStorage.setItem("lottery_config_cache", JSON.stringify(data));
-      } catch (e) {}
-      return data;
-    }
-  } catch (e: any) {
-    console.warn("[Firebase client] Direct Firestore config fetch failed:", e.message);
-  }
-
-  // 2. Try Backend API
+  // 1. Try Express Backend API first (fast, reliable on mobile cellular networks)
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 6000);
@@ -402,7 +386,7 @@ export async function getStrategyConfig(): Promise<any> {
     console.warn("[Firebase client API Warning] Failed to fetch config via Express API:", apiError.message);
   }
 
-  // 3. Check localStorage cache fallback for mobile cellular parity
+  // 2. Check localStorage cache fallback for mobile cellular parity
   try {
     const cached = localStorage.getItem("lottery_config_cache");
     if (cached) {
@@ -413,6 +397,22 @@ export async function getStrategyConfig(): Promise<any> {
       }
     }
   } catch (e) {}
+
+  // 3. Direct Firestore fetch fallback
+  try {
+    const docRef = doc(db, "config", "current");
+    const snap = await withTimeout(getDoc(docRef), 6000);
+    if (snap.exists()) {
+      const data = snap.data();
+      console.log("[Firebase client] Successfully loaded config directly from Firestore.");
+      try {
+        localStorage.setItem("lottery_config_cache", JSON.stringify(data));
+      } catch (e) {}
+      return data;
+    }
+  } catch (e: any) {
+    console.warn("[Firebase client] Direct Firestore config fetch failed:", e.message);
+  }
 
   return DEFAULT_SETTINGS;
 }
