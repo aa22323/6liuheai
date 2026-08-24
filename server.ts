@@ -502,8 +502,20 @@ app.use("/api", (req, res, next) => {
     }
   });
 
-  // API Route: 获取配置 (从 Firestore / 内存加载)
-  app.get("/api/config", (req, res) => {
+  // API Route: 获取配置 (直接从 Firestore / 内存加载)
+  app.get("/api/config", async (req, res) => {
+    try {
+      if (db) {
+        const configDocRef = doc(db, "config", "current");
+        const snap = await getDoc(configDocRef);
+        if (snap.exists()) {
+          memoryConfig = snap.data();
+          res.json({ success: true, config: memoryConfig });
+          return;
+        }
+      }
+    } catch (e) {}
+
     if (memoryConfig) {
       res.json({ success: true, config: memoryConfig });
       return;

@@ -360,43 +360,71 @@ export async function deleteHistoryRecord(period: number): Promise<void> {
  * Defaults to DEFAULT_SETTINGS if empty.
  */
 export async function getStrategyConfig(): Promise<any> {
-  // 1. Try Backend API
+  // 1. Direct Firestore fetch first (guaranteeing user's saved settings in Firestore are retrieved)
   try {
+    const docRef = doc(db, "config", "current");
+    const snap = await withTimeout(getDoc(docRef), 6000);
+    if (snap.exists()) {
+      const data = snap.data();
+      console.log("[Firebase client] Successfully loaded config directly from Firestore.");
+      try {
+        localStorage.setItem("lottery_config_cache", JSON.stringify(data));
+      } catch (e) {}
+      return data;
+    }
+  } catch (e: any) {
+    console.warn("[Firebase client] Direct Firestore config fetch failed:", e.message);
+  }
+
+  // 2. Try Backend API
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 6000);
+
     const response = await fetch(`/api/config?_t=${Date.now()}`, { 
       cache: "no-store",
-      headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
+      headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' },
+      signal: controller.signal
     });
+    clearTimeout(timeoutId);
+
     if (response.ok) {
       const result = await response.json();
       if (result.success && result.config) {
         console.log("[Firebase client] Successfully loaded config via Express API.");
+        try {
+          localStorage.setItem("lottery_config_cache", JSON.stringify(result.config));
+        } catch (e) {}
         return result.config;
       }
     }
   } catch (apiError: any) {
-    console.warn("[Firebase client API Warning] Failed to fetch config via Express API, falling back to direct Firestore:", apiError.message);
+    console.warn("[Firebase client API Warning] Failed to fetch config via Express API:", apiError.message);
   }
 
-  // 2. Direct Firestore fallback
+  // 3. Check localStorage cache fallback for mobile cellular parity
   try {
-    const docRef = doc(db, "config", "current");
-    const snap = await withTimeout(getDoc(docRef), 3000);
-    if (snap.exists()) {
-      return snap.data();
+    const cached = localStorage.getItem("lottery_config_cache");
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (parsed && typeof parsed === "object") {
+        console.log("[Firebase client] Loaded config from localStorage cache.");
+        return parsed;
+      }
     }
-    // Write default if missing
-    await withTimeout(setDoc(docRef, DEFAULT_SETTINGS), 3000);
-    return DEFAULT_SETTINGS;
-  } catch (e: any) {
-    console.warn("[Firebase client] Direct Firestore config read failed, falling back to default.", e.message);
-    return DEFAULT_SETTINGS;
-  }
+  } catch (e) {}
+
+  return DEFAULT_SETTINGS;
 }
 
 /**
  * Save strategy configuration to Firestore.
  */
 export async function saveStrategyConfig(config: any): Promise<void> {
+  try {
+    localStorage.setItem("lottery_config_cache", JSON.stringify(config));
+  } catch (e) {}
+
   try {
     // 1. Try Backend API
     const response = await fetch("/api/config", {
