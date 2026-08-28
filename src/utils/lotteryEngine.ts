@@ -643,14 +643,17 @@ export function computeZodiacScores(dfUpToT: HistoryRecord[], settings: Indicato
     }
   }
 
-  // 动态防粘滞、短期疲劳抑制与抗过拟合微扰 (Dynamic Anti-Persistence & Diversity Jitter)
+  // 动态防粘滞、短期疲劳抑制与多维周期相位微扰 (Dynamic Anti-Persistence, Fatigue & Phase Jitter)
+  const lastPeriodNum = dfRich[total - 1]?.period || total;
   allZodiacs.forEach(z => {
-    const recent2 = dfRich.slice(-2);
-    if (recent2.some(r => r.zodiac === z)) {
-      scores[z] *= 0.90; // 刚在最近2期出现的生肖给予适度疲劳抑制，防止长期锁定相同生肖
+    const recent3 = dfRich.slice(-3);
+    const recentIndex = recent3.findIndex(r => r.zodiac === z);
+    if (recentIndex !== -1) {
+      const fatigueFactor = 1.0 - (3 - recentIndex) * 0.05;
+      scores[z] *= fatigueFactor; // 近期频繁出现的生肖适度降权，促使推荐结果自然轮动
     }
-    const jitter = Math.sin(total * 13.37 + z.charCodeAt(0)) * 0.8;
-    scores[z] += jitter; // 周期伪随机微扰，打破死板的固定排序和静态重复
+    const phaseJitter = Math.sin(lastPeriodNum * 2.399 + z.charCodeAt(0) * 1.1) * 3.5;
+    scores[z] += phaseJitter; // 多维非线性周期微扰，打破静态重复与固定排序
   });
 
   // 归一化至 10 ~ 95
@@ -933,13 +936,18 @@ export function optimizeSettings(
 
       // 如果反转后综合评分（Fitness）有明显提升，则采用新状态
       if (trialFitness > bestFitness + 0.02) {
-        currentSettings.indicators[indKey] = !isCurrentlyOn;
-        const deltaHit = trialHitRate - bestHitRate;
-        const deltaMisses = trialMaxMisses - bestMaxMisses;
-        bestFitness = trialFitness;
-        bestHitRate = trialHitRate;
-        bestMaxMisses = trialMaxMisses;
-        log(`  ✔ [智能因子调优] ${indKey} 调为 [${!isCurrentlyOn ? "开启" : "静默/关闭"}] ➔ 胜率变化: ${deltaHit >= 0 ? "+" : ""}${deltaHit.toFixed(2)}%, 最大连挂变化: ${deltaMisses >= 0 ? "+" : ""}${deltaMisses}期 (综合评分提升至 ${bestFitness.toFixed(2)})`);
+        const activeCountAfter = Object.values(trialSettings.indicators).filter(Boolean).length;
+        if (!trialSettings.indicators[indKey] && activeCountAfter < 12) {
+          // 保持至少 12 个活跃分析因子，防止模型退化为单一静态因子
+        } else {
+          currentSettings.indicators[indKey] = !isCurrentlyOn;
+          const deltaHit = trialHitRate - bestHitRate;
+          const deltaMisses = trialMaxMisses - bestMaxMisses;
+          bestFitness = trialFitness;
+          bestHitRate = trialHitRate;
+          bestMaxMisses = trialMaxMisses;
+          log(`  ✔ [智能因子调优] ${indKey} 调为 [${!isCurrentlyOn ? "开启" : "静默/关闭"}] ➔ 胜率变化: ${deltaHit >= 0 ? "+" : ""}${deltaHit.toFixed(2)}%, 最大连挂变化: ${deltaMisses >= 0 ? "+" : ""}${deltaMisses}期 (综合评分提升至 ${bestFitness.toFixed(2)})`);
+        }
       }
     });
 
