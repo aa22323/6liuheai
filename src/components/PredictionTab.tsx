@@ -8,7 +8,7 @@ import { Sparkles, Calendar, Award, ChevronDown, ChevronUp, BarChart3, ShieldAle
 import Markdown from "react-markdown";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from "recharts";
 
-import { HistoryRecord, computeZodiacScores, computeZodiacDetailedBreakdown, ZodiacBreakdown, DEFAULT_SETTINGS, runWalkForwardBacktest, precomputeStats, getRealtimeBacktestStats } from "../utils/lotteryEngine";
+import { HistoryRecord, computeZodiacScores, DEFAULT_SETTINGS, runWalkForwardBacktest, precomputeStats, getRealtimeBacktestStats } from "../utils/lotteryEngine";
 import { ZODIAC_MAPPING } from "../utils/zodiacConfig";
 import { saveStrategyConfig, getSavedAiReport, saveAiReport } from "../firebase";
 import { generatePredictionAnalysis } from "../gemini";
@@ -24,7 +24,6 @@ export default function PredictionTab({ history, activeSettings, setActiveSettin
   const [nextPeriod, setNextPeriod] = useState<number>(192);
   const [predictions, setPredictions] = useState<any[]>([]);
   const [allScores, setAllScores] = useState<Record<string, number>>({});
-  const [breakdowns, setBreakdowns] = useState<ZodiacBreakdown[]>([]);
   const [expandedCard, setExpandedCard] = useState<number | null>(0); // 默认展开第1名
   const [selectedChart, setSelectedChart] = useState<string>("zodiac_scores");
 
@@ -47,9 +46,6 @@ export default function PredictionTab({ history, activeSettings, setActiveSettin
     // 2. 使用活跃配置计算得分
     const scores = computeZodiacScores(history, activeSettings);
     setAllScores(scores);
-
-    const detailedBreakdown = computeZodiacDetailedBreakdown(history, activeSettings);
-    setBreakdowns(detailedBreakdown);
 
     const sorted = Object.entries(scores).sort((a, b) => b[1] - a[1]);
     const lastZ = history[history.length - 1].zodiac;
@@ -472,60 +468,23 @@ export default function PredictionTab({ history, activeSettings, setActiveSettin
           ))}
         </div>
 
-        {/* 动态展示选中卡片的推荐理由与因子得分拆解 */}
-        {expandedCard !== null && predictions[expandedCard] && (() => {
-          const currentZodiac = predictions[expandedCard].zodiac;
-          const currentBreakdown = breakdowns.find(b => b.zodiac === currentZodiac);
-          return (
-            <div className="bg-emerald-50/50 border border-emerald-100/60 p-5 rounded-xl space-y-4 mt-4 animate-fadeIn">
-              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-emerald-200/50 pb-3">
-                <div className="text-xs font-bold text-emerald-900 flex items-center gap-1.5">
-                  <BadgeCheck className="w-4 h-4 text-emerald-600" />
-                  生肖【{currentZodiac}】多因子量化评分矩阵与得分明细 (总分: {predictions[expandedCard].score.toFixed(1)}分)
-                </div>
-                <div className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded">
-                  基于 16 项量化因子绝对数学计算
-                </div>
-              </div>
-
-              {/* 简易理由 */}
-              <div className="space-y-1">
-                <div className="text-[11px] font-bold text-slate-700">关键特征研判：</div>
-                <ul className="space-y-1 text-xs text-slate-700 font-medium">
-                  {predictions[expandedCard].reasons.map((reason: string, i: number) => (
-                    <li key={i} className="flex items-start gap-2 leading-relaxed">
-                      <span className="text-emerald-500 select-none shrink-0">•</span>
-                      <span>{reason}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              {/* 因子得分拆解明细表格 */}
-              {currentBreakdown && currentBreakdown.factors.length > 0 && (
-                <div className="space-y-2 pt-2 border-t border-emerald-200/40">
-                  <div className="text-[11px] font-bold text-slate-700 flex items-center gap-1">
-                    <BarChart3 className="w-3.5 h-3.5 text-emerald-600" />
-                    各激活因子量化贡献得分排行：
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                    {currentBreakdown.factors.map((f, fi) => (
-                      <div key={fi} className="bg-white p-2.5 rounded-lg border border-emerald-100 shadow-2xs space-y-1">
-                        <div className="flex justify-between items-center text-xs">
-                          <span className="font-bold text-slate-800">{f.name}</span>
-                          <span className={`font-mono font-bold ${f.score >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
-                            {f.score >= 0 ? `+${f.score.toFixed(1)}` : f.score.toFixed(1)}分
-                          </span>
-                        </div>
-                        <div className="text-[10px] text-gray-500 leading-normal">{f.desc}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+        {/* 动态展示选中卡片的推荐理由 */}
+        {expandedCard !== null && predictions[expandedCard] && (
+          <div className="bg-emerald-50/50 border border-emerald-100/60 p-5 rounded-xl space-y-2 mt-4 animate-fadeIn">
+            <div className="text-xs font-bold text-emerald-800 flex items-center gap-1">
+              <BadgeCheck className="w-4 h-4" />
+              生肖【{predictions[expandedCard].zodiac}】多因子评分核心推荐依据：
             </div>
-          );
-        })()}
+            <ul className="space-y-1.5 text-xs text-slate-700 font-medium">
+              {predictions[expandedCard].reasons.map((reason: string, i: number) => (
+                <li key={i} className="flex items-start gap-2 leading-relaxed">
+                  <span className="text-emerald-500 select-none shrink-0">•</span>
+                  <span>{reason}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
 
       {/* 🔮 AI 灵感预测深度研判 (Gemini AI Feature Panel) */}
