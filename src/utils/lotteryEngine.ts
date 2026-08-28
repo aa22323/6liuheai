@@ -643,6 +643,16 @@ export function computeZodiacScores(dfUpToT: HistoryRecord[], settings: Indicato
     }
   }
 
+  // 动态防粘滞、短期疲劳抑制与抗过拟合微扰 (Dynamic Anti-Persistence & Diversity Jitter)
+  allZodiacs.forEach(z => {
+    const recent2 = dfRich.slice(-2);
+    if (recent2.some(r => r.zodiac === z)) {
+      scores[z] *= 0.90; // 刚在最近2期出现的生肖给予适度疲劳抑制，防止长期锁定相同生肖
+    }
+    const jitter = Math.sin(total * 13.37 + z.charCodeAt(0)) * 0.8;
+    scores[z] += jitter; // 周期伪随机微扰，打破死板的固定排序和静态重复
+  });
+
   // 归一化至 10 ~ 95
   const vals = Object.values(scores);
   const minS = Math.min(...vals);
@@ -921,27 +931,19 @@ export function optimizeSettings(
       const trialMaxMisses = trialRes.maxConsecutiveMisses;
       const trialFitness = trialHitRate - (consecutiveMissPenaltyWeight * trialMaxMisses);
 
-      // 如果反转后综合评分（Fitness）严格增加，则采用新状态（开启有效因子，关闭噪音因子）
-      if (trialFitness > bestFitness + 0.001) {
+      // 如果反转后综合评分（Fitness）有明显提升，则采用新状态
+      if (trialFitness > bestFitness + 0.02) {
         currentSettings.indicators[indKey] = !isCurrentlyOn;
         const deltaHit = trialHitRate - bestHitRate;
         const deltaMisses = trialMaxMisses - bestMaxMisses;
         bestFitness = trialFitness;
         bestHitRate = trialHitRate;
         bestMaxMisses = trialMaxMisses;
-        log(`  ✔ [因子去噪] ${indKey} 调为 [${!isCurrentlyOn ? "开启" : "静默/关闭"}] ➔ 胜率变化: ${deltaHit >= 0 ? "+" : ""}${deltaHit.toFixed(2)}%, 最大连挂变化: ${deltaMisses >= 0 ? "+" : ""}${deltaMisses}期 (综合评分提升至 ${bestFitness.toFixed(2)})`);
-      } else if (isCurrentlyOn && Math.abs(trialFitness - bestFitness) <= 0.001) {
-        // 保证系统至少保留 4 项活跃分析因子，避免模型完全退化
-        const activeCount = Object.values(currentSettings.indicators).filter(Boolean).length;
-        if (activeCount > 4) {
-          currentSettings.indicators[indKey] = false;
-          bestFitness = trialFitness;
-          bestHitRate = trialHitRate;
-          bestMaxMisses = trialMaxMisses;
-          log(`  🛡 [去除冗余] ${indKey} 对综合评分无贡献，已调为 [静默/关闭] (保持评分 ${bestFitness.toFixed(2)})`);
-        }
+        log(`  ✔ [智能因子调优] ${indKey} 调为 [${!isCurrentlyOn ? "开启" : "静默/关闭"}] ➔ 胜率变化: ${deltaHit >= 0 ? "+" : ""}${deltaHit.toFixed(2)}%, 最大连挂变化: ${deltaMisses >= 0 ? "+" : ""}${deltaMisses}期 (综合评分提升至 ${bestFitness.toFixed(2)})`);
       }
     });
+
+
   }
 
   // 第二阶段：因子权重坐标下降深探 (Coordinate Descent Weight Optimization)
